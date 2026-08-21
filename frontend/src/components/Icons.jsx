@@ -56,3 +56,4 @@ export const IconMoonStars = (p) => <I {...p}><path d="M21 12.79A9 9 0 1 1 11.21
 export const IconStethoscope = (p) => <I {...p}><path d="M4.5 2v6a4.5 4.5 0 0 0 9 0V2M9 12.5V15a5 5 0 0 0 10 0v-1.5" /><circle cx="20" cy="10" r="2" /></I>;
 export const IconLock = (p) => <I {...p}><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></I>;
 export const IconGlobe = (p) => <I {...p}><circle cx="12" cy="12" r="10" /><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></I>;
+export const IconRefresh = (p) => <I {...p}><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" /></I>;

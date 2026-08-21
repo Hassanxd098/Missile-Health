@@ -34,42 +34,59 @@ router.get("/home", async (req, res, next) => {
     const doctorId = req.user._id;
     const [start, end] = dayRange();
     const [weekStart, weekEnd] = lastNDays(7);
-    const [profile, today, upcoming, patientsSeen, weeklyAppointments, weeklyRevenue, recentNotes] = await Promise.all([
+
+    const [profile, today, upcoming, allAppointments, patientsSeen, weeklyAppointments, weeklyRevenue, recentNotes] = await Promise.all([
       User.findById(doctorId).select("name profile hospitalId").lean(),
-      Appointment.find({ ...scope, doctor: doctorId, scheduledFor: { $gte: start, $lt: end } })
+      Appointment.find({ doctor: doctorId, scheduledFor: { $gte: start, $lt: end } })
         .populate("patient", patientFields)
         .sort({ scheduledFor: 1 })
         .lean(),
-      Appointment.find({ ...scope, doctor: doctorId, scheduledFor: { $gte: start }, status: { $in: ["confirmed", "in-progress"] } })
+      Appointment.find({ doctor: doctorId, scheduledFor: { $gte: start }, status: { $in: ["confirmed", "in-progress"] } })
         .populate("patient", patientFields)
         .sort({ scheduledFor: 1 })
         .lean(),
-      Appointment.countDocuments({ ...scope, doctor: doctorId, status: "completed" }),
+      Appointment.find({ doctor: doctorId })
+        .populate("patient", patientFields)
+        .sort({ scheduledFor: 1 })
+        .lean(),
+      Appointment.countDocuments({ doctor: doctorId, status: "completed" }),
       Appointment.aggregate([
-        { $match: { ...scope, doctor: doctorId, scheduledFor: { $gte: weekStart, $lt: weekEnd } } },
+        { $match: { doctor: doctorId, scheduledFor: { $gte: weekStart, $lt: weekEnd } } },
         { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$scheduledFor" } }, count: { $sum: 1 } } },
         { $sort: { _id: 1 } },
       ]),
       Appointment.aggregate([
-        { $match: { ...scope, doctor: doctorId, status: "completed", scheduledFor: { $gte: weekStart, $lt: weekEnd } } },
+        { $match: { doctor: doctorId, status: "completed", scheduledFor: { $gte: weekStart, $lt: weekEnd } } },
         { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$scheduledFor" } }, revenue: { $sum: "$consultationFee" } } },
         { $sort: { _id: 1 } },
       ]),
-      ClinicalNote.find({ ...scope, doctor: doctorId, status: "published" }).populate("patient", "name patientId").sort({ createdAt: -1 }).limit(8).lean(),
+      ClinicalNote.find({ doctor: doctorId, status: "published" }).populate("patient", "name patientId").sort({ createdAt: -1 }).limit(8).lean(),
     ]);
 
     const completedToday = today.filter((a) => a.status === "completed").length;
     const pendingToday = today.filter((a) => ["confirmed", "in-progress"].includes(a.status)).length;
+    const pendingTotal = allAppointments.filter((a) => ["confirmed", "in-progress"].includes(a.status)).length;
+    const totalAppointments = allAppointments.length;
     const revenueToday = today.filter((a) => a.status === "completed").reduce((s, a) => s + (a.consultationFee || 0), 0);
-    const next = upcoming.find((a) => a.status !== "in-progress") || null;
+    const totalRevenue = allAppointments.filter((a) => a.status === "completed").reduce((s, a) => s + (a.consultationFee || 0), 0);
+    const next = upcoming.find((a) => a.status !== "in-progress") || upcoming[0] || null;
 
     res.json({
       profile,
       today,
       upcoming,
+      allAppointments,
       next,
       recentNotes,
-      stats: { completedToday, pendingToday, revenueToday, totalVisits: patientsSeen },
+      stats: {
+        completedToday,
+        pendingToday,
+        pendingTotal,
+        totalAppointments,
+        revenueToday,
+        totalRevenue,
+        totalVisits: patientsSeen
+      },
       charts: { weeklyAppointments, weeklyRevenue },
     });
   } catch (error) { next(error); }
@@ -228,9 +245,19 @@ router.get("/patients/:id", async (req, res, next) => {
 // Full patient dossier, scoped by appointment — doctor and appointment must be in same hospital.
 router.get("/consult/:appointmentId", async (req, res, next) => {
   try {
-    const scope = hospitalScope(req.user);
-    const appointment = await Appointment.findOne({ ...scope, _id: req.params.appointmentId, doctor: req.user._id }).lean();
+    const appointment = await Appointment.findOne({ _id: req.params.appointmentId, doctor: req.user._id }).lean();
     if (!appointment) return res.status(404).json({ error: "Appointment not found" });
+
+    // Enforce 1-hour start rule: Doctor can only enter consultation room if appointment is within 1 hour or past scheduled time
+    const now = Date.now();
+    const apptTime = new Date(appointment.scheduledFor).getTime();
+    const oneHourMs = 60 * 60 * 1000;
+    if (appointment.status === "confirmed" && (apptTime - now) > oneHourMs) {
+      const timeStr = new Date(appointment.scheduledFor).toLocaleString();
+      return res.status(400).json({
+        error: `Consultation room is locked. This appointment is scheduled for ${timeStr}. You can only start consultations within 1 hour of the scheduled time.`
+      });
+    }
     const patientFields = "name email mobile patientId profile patient emergencyContact insurance active";
     // Prefer the hospital-scoped lookup, but fall back to a global lookup so a
     // legacy/migrated patient (missing or mismatched hospitalId) still shows

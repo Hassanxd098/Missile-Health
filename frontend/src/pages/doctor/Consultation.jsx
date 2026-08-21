@@ -1150,8 +1150,17 @@ export default function Consultation() {
   if (!data) {
     if (error) {
       return (
-        <div className="rounded-xl bg-[var(--color-danger-soft)] px-4 py-3 text-sm text-[var(--color-danger)]">
-          {error}
+        <div className="max-w-xl mx-auto py-12 animate-fade-up">
+          <div className="rounded-3xl border border-amber-300 dark:border-amber-800 bg-amber-50/80 dark:bg-amber-950/40 p-8 text-center space-y-4 shadow-lg backdrop-blur-md">
+            <div className="w-16 h-16 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-600 dark:text-amber-400 grid place-items-center mx-auto text-2xl shadow-sm">🔒</div>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">Consultation Room Locked</h2>
+            <p className="text-sm text-slate-600 dark:text-slate-300 max-w-md mx-auto leading-relaxed">{error}</p>
+            <div className="pt-2">
+              <Button onClick={() => navigate("/app/doctor")} className="shadow-md shadow-blue-500/20">
+                ← Back to Doctor Dashboard
+              </Button>
+            </div>
+          </div>
         </div>
       );
     }

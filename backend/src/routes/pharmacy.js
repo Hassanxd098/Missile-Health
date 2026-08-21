@@ -50,7 +50,7 @@ router.patch("/prescriptions/:id/status", async (req, res, next) => {
       return res.status(400).json({ error: "Medicines must be billed and paid before being dispensed" });
     }
     const rx = await Prescription.findOneAndUpdate(
-      { ...scope, _id: req.params.id, status: { $in: ["new", "sent-to-pharmacy", "preparing", "ready"] } },
+      { _id: req.params.id, status: { $in: ["new", "sent-to-pharmacy", "preparing", "ready"] } },
       { $set: { status } },
       { new: true },
     );

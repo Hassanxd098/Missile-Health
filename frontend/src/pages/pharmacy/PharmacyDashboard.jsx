@@ -29,9 +29,15 @@ export default function PharmacyDashboard() {
     return r;
   }, [data, status, q]);
 
-  const advance = async (id, st) => {
-    try { await client.patch(`/pharmacy/prescriptions/${id}/status`, { status: st }); toast("Status updated", "success"); load(); }
-    catch (e) { toast(e.response?.data?.error || "Update failed", "error"); }
+  const advance = async (item, st) => {
+    const rxId = typeof item === "object" && item ? item._id : item;
+    try {
+      await client.patch(`/pharmacy/prescriptions/${rxId}/status`, { status: st });
+      toast(`Status updated to ${st.replace("-", " ")}`, "success");
+      load();
+    } catch (e) {
+      toast(e.response?.data?.error || "Update failed", "error");
+    }
   };
 
   const openBilling = (rx) => {
@@ -98,8 +104,8 @@ export default function PharmacyDashboard() {
                   <p className="text-xs text-[var(--color-ink-soft)]">{rx.medicines?.length || 0} medicines · {rx.diagnosis}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {["sent-to-pharmacy", "new"].includes(rx.status) && <Button size="sm" onClick={() => advance(rx, "preparing")}>Start preparing</Button>}
-                  {rx.status === "preparing" && <Button size="sm" onClick={() => advance(rx, "ready")}>Mark ready</Button>}
+                  {["sent-to-pharmacy", "new"].includes(rx.status) && <Button size="sm" onClick={() => advance(rx._id, "preparing")}>Start preparing</Button>}
+                  {rx.status === "preparing" && <Button size="sm" onClick={() => advance(rx._id, "ready")}>Mark ready</Button>}
                   {["sent-to-pharmacy", "new", "preparing"].includes(rx.status) && <Button size="sm" variant="accent" onClick={() => openBilling(rx)}><IconReceipt /> Generate invoice</Button>}
                 </div>
               </div>
