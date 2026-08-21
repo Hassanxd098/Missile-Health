@@ -78,11 +78,11 @@ app.use("/api/public", publicRoutes);
 
 app.use((req, res) => res.status(404).json({ success: false, message: "Route not found" }));
 app.use((err, req, res, next) => {
-  console.error(err);
+  console.error("Express App Error:", err);
   if (err.name === "ValidationError" || err.name === "CastError")
-    return res.status(400).json({ success: false, message: "Invalid request data" });
-  if (err.code === 11000) return res.status(409).json({ success: false, message: "A record with that value already exists" });
-  res.status(500).json({ success: false, message: "Internal server error" });
+    return res.status(400).json({ success: false, error: err.message || "Invalid request data" });
+  if (err.code === 11000) return res.status(409).json({ success: false, error: "A record with that value already exists" });
+  res.status(500).json({ success: false, error: err.message || "Internal server error" });
 });
 
 // Seed a Super Admin from env (SUPER_ADMIN_* or legacy ADMIN_*).
