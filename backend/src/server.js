@@ -236,21 +236,23 @@ async function backfillDoctorAvailability() {
   }
 }
 
+if (!process.env.VERCEL) {
+  app.listen(config.port, () => console.log(`Missile Health API listening on port ${config.port}`));
+}
+
 mongoose
   .connect(config.mongoUri)
   .then(async () => {
-    await seedSuperAdmin();
-    const hospital = await seedDefaultHospital();
+    console.log("Connected to MongoDB Atlas successfully.");
+    await seedSuperAdmin().catch((e) => console.warn("Seed superadmin:", e.message));
+    const hospital = await seedDefaultHospital().catch((e) => console.warn("Seed hospital:", e.message));
     if (hospital) {
-      await migrateExistingData(hospital._id);
-      await backfillDoctorAvailability();
-    }
-    if (!process.env.VERCEL) {
-      app.listen(config.port, () => console.log(`Missile Health API listening on ${config.port}`));
+      await migrateExistingData(hospital._id).catch(() => {});
+      await backfillDoctorAvailability().catch(() => {});
     }
   })
   .catch((error) => {
-    console.error("MongoDB connection failed", error);
+    console.error("MongoDB connection failed:", error.message);
   });
 
 export default app;
