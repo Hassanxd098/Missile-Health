@@ -212,11 +212,12 @@ mongoose
       await migrateExistingData(hospital._id);
       await backfillDoctorAvailability();
     }
-    app.listen(config.port, () => console.log(`Missile Health API listening on ${config.port}`));
+    if (!process.env.VERCEL) {
+      app.listen(config.port, () => console.log(`Missile Health API listening on ${config.port}`));
+    }
   })
   .catch((error) => {
     console.error("MongoDB connection failed", error);
-    process.exit(1);
   });
 
 export default app;
