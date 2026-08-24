@@ -35,8 +35,8 @@ async function ensureDBConnected() {
         await seedSuperAdmin().catch((e) => console.warn("Seed superadmin:", e.message));
         const hospital = await seedDefaultHospital().catch((e) => console.warn("Seed hospital:", e.message));
         if (hospital) {
-          await migrateExistingData(hospital._id).catch(() => {});
-          await backfillDoctorAvailability().catch(() => {});
+          await migrateExistingData(hospital._id).catch(() => { });
+          await backfillDoctorAvailability().catch(() => { });
         }
         return m;
       })
@@ -58,10 +58,26 @@ app.use(async (req, res, next) => {
     res.status(500).json({ error: "Database connection failed. Please check MONGODB_URI." });
   }
 });
+app.get("/api", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Missile Health Backend API is running",
+  });
+});
 
 app.get("/api/health", (req, res) =>
-  res.json({ status: "ok", database: mongoose.connection.readyState === 1 ? "connected" : "disconnected" }),
+  res.json({
+    status: "ok",
+    database:
+      mongoose.connection.readyState === 1
+        ? "connected"
+        : "disconnected",
+  }),
 );
+
+// app.get("/api/health", (req, res) =>
+//   res.json({ status: "ok", database: mongoose.connection.readyState === 1 ? "connected" : "disconnected" }),
+// );
 
 app.use("/api/auth", authRoutes);
 app.use("/api/dashboard", dashboardRoutes);
@@ -160,32 +176,32 @@ async function seedDefaultHospital() {
     }
     try {
       const legacyAdminEmail = (process.env.LEGACY_ADMIN_EMAIL || "legacy.admin@example.com").toLowerCase().trim();
-       const legacyAdminPassword = process.env.LEGACY_ADMIN_PASSWORD || "LegacyAdmin@123";
-       const legacyAdminName = process.env.LEGACY_ADMIN_NAME || "Legacy Administrator";
+      const legacyAdminPassword = process.env.LEGACY_ADMIN_PASSWORD || "LegacyAdmin@123";
+      const legacyAdminName = process.env.LEGACY_ADMIN_NAME || "Legacy Administrator";
 
-       if (legacyAdminEmail !== superAdminEmail && legacyAdminEmail !== adminEmail) {
-         let legacyAdmin = await User.findOne({ email: legacyAdminEmail });
-         if (legacyAdmin) {
-           await User.updateOne({ _id: legacyAdmin._id }, { $set: { role: "admin", hospitalId: hospital._id, passwordHash: await bcrypt.hash(legacyAdminPassword, 12), active: true, blocked: false } });
-         } else {
-           legacyAdmin = await User.create({
-             name: legacyAdminName,
-             email: legacyAdminEmail,
-             passwordHash: await bcrypt.hash(legacyAdminPassword, 12),
-             role: "admin",
-             hospitalId: hospital._id,
-           });
-         }
-         console.log("Legacy admin account seeded.");
-       }
-     } catch (legacyErr) {
-       console.warn("Legacy admin seed skipped:", legacyErr.message);
-     }
+      if (legacyAdminEmail !== superAdminEmail && legacyAdminEmail !== adminEmail) {
+        let legacyAdmin = await User.findOne({ email: legacyAdminEmail });
+        if (legacyAdmin) {
+          await User.updateOne({ _id: legacyAdmin._id }, { $set: { role: "admin", hospitalId: hospital._id, passwordHash: await bcrypt.hash(legacyAdminPassword, 12), active: true, blocked: false } });
+        } else {
+          legacyAdmin = await User.create({
+            name: legacyAdminName,
+            email: legacyAdminEmail,
+            passwordHash: await bcrypt.hash(legacyAdminPassword, 12),
+            role: "admin",
+            hospitalId: hospital._id,
+          });
+        }
+        console.log("Legacy admin account seeded.");
+      }
+    } catch (legacyErr) {
+      console.warn("Legacy admin seed skipped:", legacyErr.message);
+    }
 
-     hospital.admin = admin._id;
-     await hospital.save();
+    hospital.admin = admin._id;
+    await hospital.save();
 
-     console.log("Default hospital and admin seeded.");
+    console.log("Default hospital and admin seeded.");
     return hospital;
   } catch (error) {
     console.warn("Default hospital seed skipped:", error.message);
@@ -198,10 +214,10 @@ async function migrateExistingData(defaultHospitalId) {
     let migrated = 0;
 
     const res = await User.updateMany(
-       { hospitalId: { $exists: false }, role: { $ne: "superadmin" } },
-       { $set: { hospitalId: defaultHospitalId } },
-     );
-     migrated += res.modifiedCount || 0;
+      { hospitalId: { $exists: false }, role: { $ne: "superadmin" } },
+      { $set: { hospitalId: defaultHospitalId } },
+    );
+    migrated += res.modifiedCount || 0;
 
     // Use the existing ObjectId directly — it's already from a MongoDB document.
     const oid = new mongoose.Types.ObjectId(defaultHospitalId);
@@ -247,8 +263,8 @@ mongoose
     await seedSuperAdmin().catch((e) => console.warn("Seed superadmin:", e.message));
     const hospital = await seedDefaultHospital().catch((e) => console.warn("Seed hospital:", e.message));
     if (hospital) {
-      await migrateExistingData(hospital._id).catch(() => {});
-      await backfillDoctorAvailability().catch(() => {});
+      await migrateExistingData(hospital._id).catch(() => { });
+      await backfillDoctorAvailability().catch(() => { });
     }
   })
   .catch((error) => {
