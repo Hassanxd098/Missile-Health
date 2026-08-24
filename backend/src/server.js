@@ -48,16 +48,33 @@ async function ensureDBConnected() {
   await connectPromise;
 }
 
-app.use(async (req, res, next) => {
-  if (req.path === "/api/health") return next();
-  try {
-    await ensureDBConnected();
-    next();
-  } catch (err) {
-    console.error("Database connection failure:", err);
-    res.status(500).json({ error: "Database connection failed. Please check MONGODB_URI." });
-  }
-});
+// app.use(async (req, res, next) => {
+//   if (req.path === "/api/health") return next();
+//   try {
+//     await ensureDBConnected();
+//     next();
+//   } catch (err) {
+//     console.error("Database connection failure:", err);
+//     res.status(500).json({ error: "Database connection failed. Please check MONGODB_URI." });
+//   }
+// });
+// app.get("/api", (req, res) => {
+//   res.status(200).json({
+//     success: true,
+//     message: "Missile Health Backend API is running",
+//   });
+// });
+
+// app.get("/api/health", (req, res) =>
+//   res.json({
+//     status: "ok",
+//     database:
+//       mongoose.connection.readyState === 1
+//         ? "connected"
+//         : "disconnected",
+//   }),
+// );
+// API root
 app.get("/api", (req, res) => {
   res.status(200).json({
     success: true,
@@ -65,15 +82,30 @@ app.get("/api", (req, res) => {
   });
 });
 
-app.get("/api/health", (req, res) =>
-  res.json({
+// Health check - no database connection required
+app.get("/api/health", (req, res) => {
+  res.status(200).json({
     status: "ok",
     database:
       mongoose.connection.readyState === 1
         ? "connected"
         : "disconnected",
-  }),
-);
+  });
+});
+
+// Connect to MongoDB for all other API requests
+app.use(async (req, res, next) => {
+  try {
+    await ensureDBConnected();
+    next();
+  } catch (err) {
+    console.error("Database connection failure:", err);
+
+    res.status(500).json({
+      error: "Database connection failed. Please check MONGODB_URI.",
+    });
+  }
+});
 
 // app.get("/api/health", (req, res) =>
 //   res.json({ status: "ok", database: mongoose.connection.readyState === 1 ? "connected" : "disconnected" }),
