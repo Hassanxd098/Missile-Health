@@ -13,6 +13,7 @@ const NAV = {
     { to: "/app/patient/appointments", label: "Appointments", icon: IconCalendar },
     { to: "/app/patient/prescriptions", label: "Prescriptions", icon: IconPill },
     { to: "/app/patient/bills", label: "Bills & Payments", icon: IconWallet },
+    { to: "/app/patient/ai-assistant", label: "AI Medical Assistant", icon: IconActivity },
   ],
   doctor: [
     { to: "/app/doctor", label: "Today & Queue", icon: IconDashboard },

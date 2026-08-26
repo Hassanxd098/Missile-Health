@@ -74,7 +74,15 @@ export default function PatientAppointments() {
   useEffect(() => {
     let cancelled = false;
     client.get("/patients/hospitals")
-      .then(({ data }) => { if (!cancelled) setHospitals(data.hospitals || []); })
+      .then(({ data }) => {
+        if (!cancelled) {
+          const list = data.hospitals || [];
+          setHospitals(list);
+          if (selectedHospitalId !== "all" && !list.some((h) => String(h._id) === String(selectedHospitalId))) {
+            setSelectedHospitalId("all");
+          }
+        }
+      })
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
@@ -101,9 +109,15 @@ export default function PatientAppointments() {
       .then(({ data }) => {
         if (!cancelled) {
           setDoctors(data.doctors || []);
+          setError("");
         }
       })
-      .catch((e) => { if (!cancelled) setError(e.response?.data?.error || "Unable to load doctors"); })
+      .catch((e) => {
+        if (!cancelled) {
+          setError(e.response?.data?.message || e.response?.data?.error || "Unable to load doctors");
+          setDoctors([]);
+        }
+      })
       .finally(() => { if (!cancelled) setLoadingDoctors(false); });
 
     return () => { cancelled = true; };
@@ -231,7 +245,7 @@ export default function PatientAppointments() {
       {msg && <p className="text-sm text-[var(--color-success)] bg-[var(--color-success-soft)] rounded-xl px-4 py-3 font-medium">{msg}</p>}
 
       {/* ==================== SEARCH & FILTER HEADER BAR ==================== */}
-      <Card className="bg-gradient-to-r from-[var(--color-surface)] via-[var(--color-surface-2)] to-[var(--color-surface)] border border-[var(--color-line)] shadow-sm">
+      <Card className="bg-gradient-to-r from-[var(--color-surface)] via-[var(--color-surface-2)] to-[var(--color-surface)] border border-[var(--color-line)] shadow-sm relative z-20">
         <div className="flex flex-col gap-3">
           <div>
             <h2 className="font-[var(--font-display)] text-xl font-semibold text-[var(--color-ink)]">Find Specialist & Nearby Hospitals</h2>
@@ -240,8 +254,8 @@ export default function PatientAppointments() {
             </p>
           </div>
 
-          <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-3 pt-1">
-            <div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
+            <div className="relative z-10">
               <label className="text-xs font-medium text-[var(--color-ink-soft)] mb-1 block">Search Keyword</label>
               <input
                 type="text"
@@ -252,7 +266,7 @@ export default function PatientAppointments() {
               />
             </div>
 
-            <div>
+            <div className="relative z-30">
               <label className="text-xs font-medium text-[var(--color-ink-soft)] mb-1 block">Medical Specialty</label>
               <Select value={specialty} onChange={(e) => { setSpecialty(e.target.value); setActiveDoctor(null); }}>
                 {MEDICAL_SPECIALTIES.map((spec) => (
@@ -263,7 +277,7 @@ export default function PatientAppointments() {
               </Select>
             </div>
 
-            <div>
+            <div className="relative z-20">
               <label className="text-xs font-medium text-[var(--color-ink-soft)] mb-1 block">City / Location</label>
               <Select value={selectedCity} onChange={(e) => setSelectedCity(e.target.value)}>
                 <option value="all">All Cities / Locations</option>
@@ -273,7 +287,7 @@ export default function PatientAppointments() {
               </Select>
             </div>
 
-            <div>
+            <div className="relative z-10">
               <label className="text-xs font-medium text-[var(--color-ink-soft)] mb-1 block">Specific Hospital</label>
               <Select value={selectedHospitalId} onChange={(e) => setSelectedHospitalId(e.target.value)}>
                 <option value="all">All Hospitals</option>
@@ -338,18 +352,18 @@ export default function PatientAppointments() {
                   {hospDoctors.map((doc) => {
                     const isSelected = activeDoctor && String(activeDoctor._id) === String(doc._id);
                     return (
-                      <div key={doc._id} className={`py-3 first:pt-0 last:pb-0 flex flex-wrap items-center justify-between gap-3 p-2 rounded-xl transition-all ${isSelected ? "bg-[var(--color-primary-soft)]/20 border border-[var(--color-primary)]" : "hover:bg-[var(--color-surface-2)]"}`}>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold text-sm text-[var(--color-ink)]">{doc.name}</span>
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--color-primary-soft)] text-[var(--color-primary)] font-medium">
+                      <div key={doc._id} className={`py-3 first:pt-0 last:pb-0 flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 p-2.5 rounded-xl transition-all ${isSelected ? "bg-[var(--color-primary-soft)]/20 border border-[var(--color-primary)]" : "hover:bg-[var(--color-surface-2)]"}`}>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold text-sm text-[var(--color-ink)] truncate">{doc.name}</span>
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--color-primary-soft)] text-[var(--color-primary)] font-medium shrink-0">
                               {doc.profile?.specialty || "Specialist"}
                             </span>
                           </div>
-                          <p className="text-xs text-[var(--color-ink-soft)] mt-1">
-                            {doc.profile?.qualification ? `${doc.profile.qualification} · ` : ""}
-                            {doc.profile?.experienceYears ? `${doc.profile.experienceYears} yrs exp · ` : ""}
-                            Fee: <strong className="text-[var(--color-primary)]">{money(doc.profile?.consultationFee)}</strong>
+                          <p className="text-xs text-[var(--color-ink-soft)] mt-1 flex flex-wrap items-center gap-x-1.5">
+                            {doc.profile?.qualification && <span>{doc.profile.qualification} ·</span>}
+                            {doc.profile?.experienceYears && <span>{doc.profile.experienceYears} yrs exp ·</span>}
+                            <span>Fee: <strong className="text-[var(--color-primary)]">{money(doc.profile?.consultationFee)}</strong></span>
                           </p>
                           {doc.profile?.visitingHours && (
                             <p className="text-xs text-[var(--color-ink-soft)] mt-0.5">🕒 Hours: {doc.profile.visitingHours}</p>
@@ -360,6 +374,7 @@ export default function PatientAppointments() {
                           variant={isSelected ? "primary" : "secondary"}
                           size="sm"
                           onClick={() => handleSelectDoctorForBooking(doc)}
+                          className="shrink-0"
                         >
                           {isSelected ? "Selected ✓" : "Book Slot"}
                         </Button>

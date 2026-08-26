@@ -75,6 +75,24 @@ export default function SuperAdminDashboard() {
     }
   };
 
+  const deleteHospital = async (h) => {
+    if (h.code === "DEFAULT") {
+      toast("Default system hospital cannot be deleted", "error");
+      return;
+    }
+    if (!window.confirm(`Are you sure you want to delete "${h.name}"? This will deactivate all staff accounts associated with this hospital.`)) {
+      return;
+    }
+    try {
+      await client.delete(`/super-admin/hospitals/${h._id}`);
+      toast("Hospital deleted successfully", "success");
+      load(page, search);
+      loadPlatform();
+    } catch (err) {
+      toast(err.response?.data?.message || "Could not delete hospital", "error");
+    }
+  };
+
   const openHospital = async (h) => {
     setViewing({ hospital: h });
     setViewLoading(true);
@@ -213,11 +231,14 @@ export default function SuperAdminDashboard() {
                       <td className="py-3"><StatusBadge status={h.status} /></td>
                       <td className="py-3 text-xs text-[var(--color-ink-soft)]">{new Date(h.createdAt).toLocaleDateString()}</td>
                       <td className="py-3 text-right">
-                        <div className="flex gap-1 justify-end">
+                        <div className="flex gap-1 justify-end flex-wrap">
                           <Button size="sm" variant="ghost" onClick={() => openHospital(h)}>View</Button>
-                          <Button size="sm" variant={h.status === "active" ? "danger" : "success"} onClick={() => toggleStatus(h, h.status === "active" ? "inactive" : "active")}>
+                          <Button size="sm" variant={h.status === "active" ? "ghost" : "success"} onClick={() => toggleStatus(h, h.status === "active" ? "inactive" : "active")}>
                             {h.status === "active" ? "Deactivate" : "Activate"}
                           </Button>
+                          {h.code !== "DEFAULT" && (
+                            <Button size="sm" variant="danger" onClick={() => deleteHospital(h)}>Delete</Button>
+                          )}
                         </div>
                       </td>
                     </tr>

@@ -378,4 +378,28 @@ router.get("/hospitals/search", async (req, res, next) => {
   }
 });
 
+// Delete hospital & deactivate associated users.
+router.delete("/hospitals/:id", async (req, res, next) => {
+  try {
+    const hospital = await Hospital.findById(req.params.id);
+    if (!hospital) return res.status(404).json({ success: false, message: "Hospital not found" });
+
+    if (hospital.code === "DEFAULT") {
+      return res.status(400).json({ success: false, message: "Cannot delete the default system hospital" });
+    }
+
+    // Deactivate all users belonging to this hospital so orphaned records don't appear anywhere
+    await User.updateMany({ hospitalId: hospital._id }, { $set: { active: false } });
+
+    // Delete hospital document
+    await Hospital.findByIdAndDelete(req.params.id);
+
+    logAudit({ actor: req.user._id, actorRole: "superadmin", action: "hospital.delete", entity: "hospital", entityId: hospital._id, meta: { name: hospital.name, code: hospital.code } });
+
+    res.json({ success: true, message: "Hospital deleted successfully" });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

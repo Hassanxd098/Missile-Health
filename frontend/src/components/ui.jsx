@@ -124,7 +124,7 @@ export function Select({ value, onChange, children, className = "", placeholder 
   };
 
   return (
-    <div className={`relative w-full ${className}`}>
+    <div className={`relative w-full ${open ? "z-[150]" : ""} ${className}`}>
       {name && <input type="hidden" name={name} value={currentVal || ""} required={required} />}
       
       <button
@@ -133,7 +133,7 @@ export function Select({ value, onChange, children, className = "", placeholder 
         onClick={() => setOpen(!open)}
         className="w-full flex items-center justify-between gap-3 rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-4 py-3 text-sm font-semibold text-[var(--color-ink)] shadow-sm hover:border-[var(--color-primary)] hover:shadow-md hover:shadow-blue-500/10 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        <span className="truncate text-left">
+        <span className="truncate text-left font-medium">
           {displayLabel}
         </span>
         <svg
@@ -150,7 +150,7 @@ export function Select({ value, onChange, children, className = "", placeholder 
       {open && (
         <>
           <div className="fixed inset-0 z-[140]" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 right-0 top-full mt-2 z-[150] glass-card rounded-2xl border border-[var(--color-line)] p-1.5 shadow-2xl max-h-64 overflow-y-auto animate-blur-in">
+          <div className="absolute left-0 right-0 top-full mt-2 z-[150] bg-[var(--color-surface)] rounded-2xl border border-[var(--color-line)] p-1.5 shadow-2xl max-h-64 overflow-y-auto animate-blur-in">
             {options.length > 6 && (
               <div className="p-1 mb-1.5 border-b border-[var(--color-line)]">
                 <input
@@ -158,7 +158,7 @@ export function Select({ value, onChange, children, className = "", placeholder 
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search options..."
-                  className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--color-surface)] border border-[var(--color-line)] outline-none focus:border-[var(--color-primary)] text-[var(--color-ink)]"
+                  className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-line)] outline-none focus:border-[var(--color-primary)] text-[var(--color-ink)]"
                   autoFocus
                 />
               </div>
@@ -179,7 +179,7 @@ export function Select({ value, onChange, children, className = "", placeholder 
                     } ${opt.disabled ? "opacity-40 cursor-not-allowed" : ""}`}
                   >
                     <span className="truncate text-left">{opt.label}</span>
-                    {isSelected && <span className="font-bold ml-2">✓</span>}
+                    {isSelected && <span className="font-bold ml-2 shrink-0">✓</span>}
                   </button>
                 );
               })
@@ -211,7 +211,7 @@ export function CustomDropdown({ options = [], value, onChange, placeholder = "S
   });
 
   return (
-    <div className={`relative w-full ${className}`}>
+    <div className={`relative w-full ${open ? "z-[150]" : ""} ${className}`}>
       <button
         type="button"
         disabled={disabled}
@@ -236,7 +236,7 @@ export function CustomDropdown({ options = [], value, onChange, placeholder = "S
       {open && (
         <>
           <div className="fixed inset-0 z-[140]" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 right-0 top-full mt-2 z-[150] glass-card rounded-2xl border border-[var(--color-line)] p-1.5 shadow-2xl max-h-64 overflow-y-auto animate-blur-in">
+          <div className="absolute left-0 right-0 top-full mt-2 z-[150] bg-[var(--color-surface)] rounded-2xl border border-[var(--color-line)] p-1.5 shadow-2xl max-h-64 overflow-y-auto animate-blur-in">
             {options.length > 6 && (
               <div className="p-1 mb-1.5 border-b border-[var(--color-line)]">
                 <input
@@ -244,7 +244,7 @@ export function CustomDropdown({ options = [], value, onChange, placeholder = "S
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search options..."
-                  className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--color-surface)] border border-[var(--color-line)] outline-none focus:border-[var(--color-primary)] text-[var(--color-ink)]"
+                  className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-line)] outline-none focus:border-[var(--color-primary)] text-[var(--color-ink)]"
                   autoFocus
                 />
               </div>
@@ -275,7 +275,7 @@ export function CustomDropdown({ options = [], value, onChange, placeholder = "S
                       {optIcon && <span>{optIcon}</span>}
                       {lbl}
                     </span>
-                    {isSelected && <span className="font-bold ml-2">✓</span>}
+                    {isSelected && <span className="font-bold ml-2 shrink-0">✓</span>}
                   </button>
                 );
               })

@@ -13,6 +13,7 @@ import PatientProfile from "./pages/patient/PatientProfile";
 import PatientAppointments from "./pages/patient/PatientAppointments";
 import PatientPrescriptions from "./pages/patient/PatientPrescriptions";
 import PatientBills from "./pages/patient/PatientBills";
+import PatientAIAssistant from "./pages/patient/PatientAIAssistant";
 
 import DoctorDashboard from "./pages/doctor/DoctorDashboard";
 import Consultation from "./pages/doctor/Consultation";
@@ -63,6 +64,7 @@ const APP_ROUTES = {
     ["/app/patient/appointments", PatientAppointments],
     ["/app/patient/prescriptions", PatientPrescriptions],
     ["/app/patient/bills", PatientBills],
+    ["/app/patient/ai-assistant", PatientAIAssistant],
   ],
   doctor: [
     ["/app/doctor", DoctorDashboard],

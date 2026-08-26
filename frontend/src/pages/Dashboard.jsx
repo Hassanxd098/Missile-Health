@@ -141,7 +141,7 @@ function Patient() {
               Choose a specialty and preferred clinic location.
             </p>
           </div>
-          <div className="grid grid-cols-2 gap-3 w-full md:w-auto">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full md:w-80">
             <Select
               value={specialty}
               onChange={(e) => setSpecialty(e.target.value)}

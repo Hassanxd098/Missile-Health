@@ -42,9 +42,13 @@ router.get("/home", async (req, res, next) => {
       Appointment.find({ patient: req.user._id }).populate("doctor", doctorFields).sort({ scheduledFor: -1 }).lean(),
       Prescription.find({ patient: req.user._id }).populate("doctor", "name profile.specialty").sort({ createdAt: -1 }).lean(),
       Invoice.find({ patient: req.user._id }).populate("doctor", "name profile.specialty").populate("prescription", "prescriptionId").sort({ createdAt: -1 }).lean(),
-      User.find({ role: "doctor", active: true }).select(doctorFields).populate("hospitalId", "name code city state").sort({ name: 1 }).lean(),
+      User.find({ role: "doctor", active: true }).select(doctorFields).populate("hospitalId", "name code city state status").sort({ name: 1 }).lean(),
       Notification.find({ user: req.user._id }).sort({ createdAt: -1 }).limit(10).lean(),
     ]);
+
+    const activeDoctors = (doctors || []).filter(
+      (doc) => doc.hospitalId && typeof doc.hospitalId === "object" && doc.hospitalId.status !== "inactive"
+    );
 
     const upcoming = appointments.find((a) => ["requested", "confirmed", "in-progress"].includes(a.status));
     const lastConsultation = prescriptions[0] || null;
@@ -56,7 +60,7 @@ router.get("/home", async (req, res, next) => {
       appointments,
       prescriptions,
       invoices,
-      doctors,
+      doctors: activeDoctors,
       upcoming,
       lastConsultation,
       stats: {
@@ -90,9 +94,12 @@ router.get("/doctors", async (req, res, next) => {
 
     let hospitalObj = null;
     if (req.query.hospital && req.query.hospital !== "all") {
-      hospitalObj = await resolveHospital(req.query.hospital, req.user.hospitalId);
+      hospitalObj = await resolveHospital(req.query.hospital, null);
       if (hospitalObj) {
         filter.hospitalId = hospitalObj._id;
+      } else {
+        // Requested hospital does not exist or was deleted/deactivated
+        return res.json({ hospital: null, doctors: [], specialties: [] });
       }
     }
 
@@ -100,20 +107,24 @@ router.get("/doctors", async (req, res, next) => {
       filter["profile.specialty"] = new RegExp(req.query.specialty.trim(), "i");
     }
 
-    const [doctors, rawSpecialties] = await Promise.all([
+    const [rawDoctors, rawSpecialties] = await Promise.all([
       User.find(filter)
         .select(doctorFields)
-        .populate("hospitalId", "name code city state")
+        .populate("hospitalId", "name code city state status")
         .sort({ name: 1 })
         .lean(),
       User.distinct("profile.specialty", { role: "doctor", active: true }),
     ]);
 
+    const doctors = (rawDoctors || []).filter(
+      (doc) => doc.hospitalId && typeof doc.hospitalId === "object" && doc.hospitalId.status !== "inactive"
+    );
+
     const specialties = (rawSpecialties || []).filter(Boolean).sort();
 
     res.json({
       hospital: hospitalObj ? { _id: hospitalObj._id, name: hospitalObj.name, code: hospitalObj.code } : null,
-      doctors: doctors || [],
+      doctors,
       specialties,
     });
   } catch (error) { next(error); }

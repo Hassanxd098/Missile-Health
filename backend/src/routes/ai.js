@@ -1177,5 +1177,213 @@ router.post(
     }
   },
 );
+/* =========================================================
+   PATIENT AI MEDICAL ASSISTANT ENDPOINT (7 MODES)
+========================================================= */
+
+const PATIENT_AI_DISCLAIMER =
+  "Important: AI output is generated for draft and decision support purposes only. All summaries, records, and instructions must be reviewed and confirmed by a licensed medical doctor who makes the final clinical decision.";
+
+const patientModePrompts = {
+  summarize_consultation: `
+You are an expert AI Medical Assistant. Your goal is to convert doctor-patient consultation notes or uploaded documents into an easy-to-understand summary.
+
+STRICT SCOPE RULE: ONLY explain what is explicitly mentioned in the user's uploaded document or input text. Do NOT add unmentioned clinical sections or unrequested extra healthcare tips.
+LANGUAGE RULE: Explain by default in simple, clear English. BUT if the user's input text is written in another language (e.g. Tamil, Hindi) or explicitly requests a specific language, respond in that exact language.
+
+Structure your response clearly:
+- 📌 **Consultation Overview**: Short 2-sentence summary of what was actually documented.
+- 🩺 **Doctor Findings**: Stated findings explained in simple everyday terms.
+- 💊 **Prescribed Treatment**: Summary of prescribed medications or procedures listed in the document.
+- 🕒 **Follow-up Notes**: Any follow-up date or specific warning stated in the document.
+`,
+
+  structured_record: `
+You are an AI Clinical Structuring Assistant. Your task is to EXTRACT medical details from the provided doctor notes, document, or consultation text into a structured JSON record.
+
+STRICT SCOPE RULE:
+- ONLY populate fields that are explicitly present in the input text or document.
+- If a specific field is not mentioned in the text, leave it as an empty string (""). Do NOT invent symptoms, vitals, or extra tips.
+- LANGUAGE RULE: Explain by default in simple English. If the user writes or asks in Tamil, Hindi, or another language, populate string values in that language.
+
+Return ONLY valid JSON matching this structure:
+{
+  "chiefComplaint": "extracted complaint or symptoms if present",
+  "vitals": "extracted vitals if present",
+  "clinicalFindings": "extracted physical exam or clinical notes if present",
+  "diagnosis": "extracted diagnosis if present",
+  "treatmentPlan": "extracted treatment or medicines if present",
+  "followUp": "extracted follow-up instructions if present"
+}
+`,
+
+  prescription_instructions: `
+You are an AI Pharmacy & Prescription Assistant. Extract all prescribed medications from the input text or document and create a simple, direct medication schedule.
+
+STRICT SCOPE RULE:
+- ONLY explain medications explicitly listed in the document. Do NOT add extra unprescribed drugs or general healthcare advice not in the document.
+- Write simple, direct instructions (e.g. "Calpol 500mg: Take 1 tablet morning and night after food for 5 days.").
+- LANGUAGE RULE: Default to simple English unless the input text is written or requested in another language (e.g. Tamil, Hindi).
+
+Return ONLY valid JSON matching this structure:
+{
+  "summary": "Simple 1-line overview of prescribed medicines listed",
+  "medicines": [
+    {
+      "name": "Medicine Name e.g. Calpol 500mg",
+      "dosage": "e.g. 1 tablet",
+      "schedule": "e.g. Morning and Night",
+      "foodTiming": "e.g. After food",
+      "precautions": "e.g. Take daily for 5 days"
+    }
+  ],
+  "generalAdvice": "Only specific precautions listed on the prescription, otherwise empty string"
+}
+`,
+
+  patient_history: `
+You are an AI Medical History Analyst. Synthesize the provided medical notes into a clear patient history summary based strictly on the uploaded document.
+
+STRICT SCOPE RULE: ONLY include history items explicitly stated in the document.
+- 🏥 **Active Conditions**: Stated health issues.
+- 🏥 **Past Procedures**: Historical surgeries or hospital stays listed.
+- ⚠️ **Allergies**: Stated allergies.
+`,
+
+  explain_lab_report: `
+You are an AI Pathology & Lab Report Interpreter. Analyze ONLY the provided lab report test values.
+
+STRICT SCOPE RULE:
+- ONLY explain the specific lab test metrics listed in the uploaded document. Do NOT add unrequested extra health tips or unrelated medical sections.
+- Explain elevated or low values in simple, everyday words.
+- LANGUAGE RULE: Default to simple English. If the input text is written or requested in another language (e.g. Tamil, Hindi), explain in that language.
+
+Return ONLY valid JSON matching this structure:
+{
+  "summary": "Simple 2-sentence explanation of the lab tests conducted",
+  "normalResults": ["Summary of normal test values listed"],
+  "abnormalResults": ["Summary of elevated or low test values explained in simple everyday words"],
+  "doctorQuestions": [],
+  "labMetrics": [
+    {
+      "name": "Test Name e.g. Hemoglobin",
+      "value": 11.2,
+      "minRef": 12.0,
+      "maxRef": 16.5,
+      "unit": "g/dL",
+      "status": "low"
+    }
+  ]
+}
+Never provide a definitive medical diagnosis.
+`,
+
+  discharge_summary: `
+You are an AI Hospital Discharge Summary Specialist. Format ONLY the provided hospital stay notes into a simple discharge summary.
+
+Structure your response clearly:
+- 🏥 **Admission & Discharge**: Stated admission reason and dates.
+- 🩺 **Procedures**: Stated procedures performed.
+- 💊 **Discharge Medications**: List of medications to continue.
+`,
+
+  voice_scribe: `
+You are an AI Medical Voice Scribe. Convert spoken consultation audio transcript strictly into structured clinical notes.
+`,
+};
+
+router.post(
+  "/patient-assistant",
+  requireAuth,
+  allowRoles("patient", "doctor", "admin", "superadmin", "hospital_admin"),
+  assistantRateLimit,
+  async (req, res, next) => {
+    try {
+      if (!config.geminiApiKey) {
+        return res.status(503).json({
+          success: false,
+          error: "Gemini AI is not configured. Please add GEMINI_API_KEY to backend/.env",
+        });
+      }
+
+      const mode = String(req.body.mode || "summarize_consultation").trim();
+      const inputText = String(req.body.inputText || "").trim();
+      const documentText = String(req.body.documentText || "").trim();
+
+      const combinedText = [inputText, documentText].filter(Boolean).join("\n\n--- DOCUMENT CONTENT ---\n\n");
+
+      if (!combinedText || combinedText.length < 5) {
+        return res.status(400).json({
+          success: false,
+          error: "Please provide clinical text or upload a document to analyze.",
+        });
+      }
+
+      if (combinedText.length > 20000) {
+        return res.status(400).json({
+          success: false,
+          error: "Input text is too long. Please shorten it or select a smaller document section.",
+        });
+      }
+
+      const systemInstruction = patientModePrompts[mode] || patientModePrompts.summarize_consultation;
+
+      const isJsonMode = ["structured_record", "prescription_instructions", "explain_lab_report"].includes(mode);
+
+      const genAI = new GoogleGenerativeAI(config.geminiApiKey);
+
+      const model = genAI.getGenerativeModel({
+        model: config.geminiModel,
+        systemInstruction,
+        generationConfig: {
+          temperature: 0.2,
+          ...(isJsonMode ? { responseMimeType: "application/json" } : {}),
+        },
+      });
+
+      const prompt = `
+Analyze the following medical text/notes:
+
+${combinedText}
+
+${isJsonMode ? "Return ONLY valid JSON matching the requested schema." : "Format the output cleanly in markdown with emojis."}
+`;
+
+      const result = await withGeminiRetry(() => model.generateContent(prompt), {
+        attempts: 3,
+        delayMs: 1000,
+        backoff: 1.8,
+      });
+
+      const outputText = result.response.text().trim();
+
+      let parsedData = null;
+      if (isJsonMode) {
+        try {
+          parsedData = parseGeminiJson(outputText);
+        } catch (e) {
+          console.warn("Patient AI JSON parse fallback for mode:", mode);
+        }
+      }
+
+      res.json({
+        success: true,
+        mode,
+        output: outputText,
+        data: parsedData,
+        disclaimer: PATIENT_AI_DISCLAIMER,
+      });
+    } catch (error) {
+      console.error("Patient AI Assistant Error:", error);
+      if (classifyGeminiError(error) === "quota") {
+        return res.status(503).json({
+          success: false,
+          error: "AI Assistant quota is temporarily exhausted. Please wait a moment and try again.",
+        });
+      }
+      next(error);
+    }
+  }
+);
 
 export default router;
