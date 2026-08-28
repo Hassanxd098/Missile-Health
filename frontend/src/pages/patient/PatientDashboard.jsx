@@ -37,25 +37,29 @@ export default function PatientDashboard() {
 
   return (
     <div className="space-y-6 animate-fade-up">
-      {error && <p className="text-sm text-[var(--color-danger)] bg-[var(--color-danger-soft)] rounded-xl px-3 py-2">{error}</p>}
+      {error && <p className="text-sm text-[var(--color-danger)] bg-[var(--color-danger-soft)] rounded-2xl px-4 py-3 font-medium border border-[var(--color-danger)]/20">{error}</p>}
 
       {/* Welcome + patient ID */}
-      <Card className="relative overflow-hidden border-[var(--color-primary-soft)]">
-        <div className="absolute -right-10 -top-10 w-48 h-48 rounded-full bg-[var(--color-primary-soft)] opacity-70" />
+      <Card className="relative overflow-hidden border-[var(--color-primary-soft)] p-6">
+        <div className="absolute -right-10 -top-10 w-52 h-52 rounded-full bg-[var(--color-primary-soft)] opacity-70 blur-2xl pointer-events-none" />
         <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h1 className="font-[var(--font-display)] text-2xl text-[var(--color-ink)]">Hello, {data.user?.name || "Patient"}</h1>
-            <p className="text-sm text-[var(--color-ink-soft)] mt-1">Patient ID <span className="font-[var(--font-mono)] text-[var(--color-primary)]">{data.user?.patientId}</span></p>
+          <div className="space-y-1">
+            <h1 className="font-[var(--font-display)] text-2xl md:text-3xl font-extrabold text-[var(--color-ink)] tracking-tight">Welcome, {data.user?.name || "Patient"}</h1>
+            <p className="text-xs sm:text-sm text-[var(--color-ink-soft)] font-medium">Patient ID: <span className="font-[var(--font-mono)] font-bold text-[var(--color-primary)]">{data.user?.patientId}</span></p>
             {upcoming ? (
-              <p className="text-sm mt-3 text-[var(--color-ink)]">
-                Upcoming appointment: <b>{upcoming.doctor?.name}</b> on {new Date(upcoming.scheduledFor).toLocaleString()} <StatusBadge status={upcoming.status} className="ml-2" />
-              </p>
+              <div className="mt-3 p-3 rounded-2xl bg-[var(--color-surface-2)] border border-[var(--color-line)] inline-flex flex-wrap items-center gap-2 text-xs sm:text-sm text-[var(--color-ink)] font-medium">
+                <span>Upcoming appointment:</span>
+                <b className="font-bold text-[var(--color-primary)]">{upcoming.doctor?.name}</b>
+                <span>on</span>
+                <span className="font-semibold">{new Date(upcoming.scheduledFor).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
+                <StatusBadge status={upcoming.status} />
+              </div>
             ) : (
-              <p className="text-sm mt-3 text-[var(--color-ink-soft)]">No upcoming appointments.</p>
+              <p className="text-xs text-[var(--color-ink-soft)] mt-2 font-medium">No upcoming appointments scheduled.</p>
             )}
           </div>
-          <div className="flex gap-2">
-            <Button onClick={() => navigate("/app/patient/appointments")}><IconPlus /> Book appointment</Button>
+          <div className="flex gap-2 shrink-0">
+            <Button onClick={() => navigate("/app/patient/appointments")} icon={<IconPlus />}>Book appointment</Button>
           </div>
         </div>
       </Card>
@@ -69,7 +73,7 @@ export default function PatientDashboard() {
       </div>
 
       {/* Quick actions */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
           { label: "Book appointment", to: "/app/patient/appointments", icon: IconCalendar },
           { label: "Download prescription", to: "/app/patient/prescriptions", icon: IconDownload },
@@ -77,9 +81,9 @@ export default function PatientDashboard() {
         ].map((a) => {
           const Icon = a.icon;
           return (
-            <Link key={a.label} to={a.to} className="group bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl p-4 flex flex-col items-start gap-3 hover:border-[var(--color-primary)] transition-colors">
-              <div className="w-9 h-9 rounded-xl bg-[var(--color-primary-soft)] text-[var(--color-primary)] grid place-items-center group-hover:bg-[var(--color-primary)] group-hover:text-white transition-colors"><Icon /></div>
-              <span className="text-sm font-medium text-[var(--color-ink)]">{a.label}</span>
+            <Link key={a.label} to={a.to} className="group bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl p-4 flex items-center gap-3.5 hover:border-[var(--color-primary)] hover:shadow-md transition-all duration-200">
+              <div className="w-11 h-11 rounded-xl bg-[var(--color-primary-soft)] text-[var(--color-primary)] grid place-items-center shrink-0 group-hover:bg-[var(--color-primary)] group-hover:text-white transition-colors"><Icon className="text-xl" /></div>
+              <span className="text-sm font-bold text-[var(--color-ink)] group-hover:text-[var(--color-primary)] transition-colors">{a.label}</span>
             </Link>
           );
         })}
@@ -87,41 +91,43 @@ export default function PatientDashboard() {
 
       {/* Last consultation */}
       {data.lastConsultation && (
-        <Card>
+        <Card className="p-5">
           <SectionTitle title="Last consultation" subtitle="Most recent prescription issued to you" />
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-[var(--color-primary-soft)] text-[var(--color-primary)] grid place-items-center"><IconDoctor className="text-lg" /></div>
+          <div className="flex flex-wrap items-center gap-3.5 p-3 rounded-2xl bg-[var(--color-surface-2)]/60 border border-[var(--color-line)]">
+            <div className="w-10 h-10 rounded-2xl bg-[var(--color-primary-soft)] text-[var(--color-primary)] grid place-items-center shrink-0"><IconDoctor className="text-xl" /></div>
             <div className="flex-1 min-w-0">
-              <p className="font-medium text-[var(--color-ink)]">{data.lastConsultation.doctor?.name || "Doctor"}</p>
-              <p className="text-xs text-[var(--color-ink-soft)]">{new Date(data.lastConsultation.createdAt).toLocaleString()}</p>
+              <p className="font-bold text-sm text-[var(--color-ink)]">{data.lastConsultation.doctor?.name || "Doctor"}</p>
+              <p className="text-xs text-[var(--color-ink-soft)] font-medium mt-0.5">{new Date(data.lastConsultation.createdAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</p>
             </div>
-            <Link to="/app/patient/prescriptions" className="text-sm text-[var(--color-primary)] hover:underline">View</Link>
+            <Link to="/app/patient/prescriptions" className="text-xs font-bold text-[var(--color-primary)] hover:underline px-3 py-1.5 rounded-xl bg-[var(--color-primary-soft)]">View Details</Link>
           </div>
         </Card>
       )}
 
       {/* Care timeline with search */}
-      <Card>
+      <Card className="p-5">
         <SectionTitle
           title="Your care timeline"
           subtitle="Every consultation, prescription and bill in one place"
           right={<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search visits, bills, medicines…" className={`${inputClass} md:w-64`} />}
         />
         {filtered.length ? (
-          <div className="space-y-0">
+          <div className="divide-y divide-[var(--color-line)]">
             {filtered.slice(0, 12).map((r) => (
-              <div key={r.id} className="flex items-start gap-4 py-3 border-b border-[var(--color-line)] last:border-0">
-                <div className={`mt-1 w-9 h-9 rounded-xl grid place-items-center ${r.kind === "Bill" ? "bg-[var(--color-warning-soft)] text-[var(--color-warning)]" : "bg-[var(--color-success-soft)] text-[var(--color-success)]"}`}>
-                  {r.kind === "Bill" ? <IconWallet className="text-base" /> : <IconPill className="text-base" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium text-[var(--color-ink)]">{r.title}</span>
-                    <StatusBadge status={r.bill?.status} />
+              <div key={r.id} className="flex items-center justify-between gap-4 py-3.5 first:pt-0 last:pb-0">
+                <div className="flex items-center gap-3.5 min-w-0 flex-1">
+                  <div className={`w-10 h-10 rounded-2xl grid place-items-center shrink-0 ${r.kind === "Bill" ? "bg-[var(--color-warning-soft)] text-[var(--color-warning)]" : "bg-[var(--color-success-soft)] text-[var(--color-success)]"}`}>
+                    {r.kind === "Bill" ? <IconWallet className="text-lg" /> : <IconPill className="text-lg" />}
                   </div>
-                  <p className="text-sm text-[var(--color-ink-soft)] truncate">{r.sub}</p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-bold text-sm text-[var(--color-ink)] truncate">{r.title}</span>
+                      <StatusBadge status={r.bill?.status} />
+                    </div>
+                    <p className="text-xs text-[var(--color-ink-soft)] truncate font-medium mt-0.5">{r.sub}</p>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 text-xs text-[var(--color-ink-soft)] shrink-0">
+                <div className="flex items-center gap-1.5 text-xs text-[var(--color-ink-soft)] font-medium shrink-0">
                   <IconClock className="text-sm" /> {new Date(r.date).toLocaleDateString()}
                 </div>
               </div>

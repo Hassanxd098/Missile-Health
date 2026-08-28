@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import client from "../../api/client";
 import Card, { Button, Field, inputClass, Select, StatusBadge, EmptyState, SectionTitle, SkeletonCard, useToast, Modal } from "../../components/ui";
@@ -28,7 +28,7 @@ const GENDERS = ["Male", "Female", "Other"];
 const emptyForm = () => ({
   name: "", employeeNumber: "", staffType: "nurse", designation: "", department: "",
   phone: "", email: "", joinDate: "", gender: "", address: "", profilePhoto: "",
-  salary: "", status: "active", password: "",
+  salary: "", status: "active", password: "", hospitalId: "",
   specialty: "", visitingHours: "", consultationFee: "", qualification: "", location: "",
 });
 
@@ -49,6 +49,7 @@ const fromEmployee = (e) => {
     salary: e.salary || "",
     status: e.active ? "active" : "inactive",
     password: "",
+    hospitalId: e.hospitalId?._id || e.hospitalId || "",
     specialty: e.specialty || "",
     visitingHours: e.visitingHours || "",
     consultationFee: e.consultationFee || "",
@@ -77,19 +78,33 @@ export default function ManageEmployees() {
     if (CATEGORIES.some((c) => c.key === singular)) return singular;
     return "all";
   };
-  // When a specific sub-route is active (e.g. /employees/doctor), the type is locked
   const lockedType = routeType ? validType(routeType) : null;
   const [type, setType] = useState(lockedType || "all");
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
+  const [branches, setBranches] = useState([]);
+  const [branchFilter, setBranchFilter] = useState("all");
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null);
   const [viewing, setViewing] = useState(null);
   const [deleting, setDeleting] = useState(null);
   const [form, setForm] = useState(emptyForm());
   const toast = useToast();
+
+  const loadBranches = useCallback(async () => {
+    try {
+      const { data: bData } = await client.get("/admin/my-branches");
+      setBranches(bData.branches || []);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadBranches();
+  }, [loadBranches]);
 
   useEffect(() => {
     const resolved = routeType ? validType(routeType) : "all";
@@ -100,17 +115,18 @@ export default function ManageEmployees() {
     setError("");
     try {
       const params = new URLSearchParams({ type, status });
+      if (branchFilter && branchFilter !== "all") params.set("hospitalId", branchFilter);
       if (search.trim()) params.set("q", search.trim());
       setData((await client.get(`/admin/employees?${params}`)).data);
     } catch (e) { setError(e.response?.data?.error || "Unable to load employees"); setData({ employees: [], total: 0, type }); }
   };
-  useEffect(() => { load(); }, [type, status]);
+  useEffect(() => { load(); }, [type, status, branchFilter]);
   const searchNow = () => load();
 
-  // When the type is locked to a specific role, pre-fill staffType in the empty form
   const openCreate = () => {
     const defaultType = (lockedType && lockedType !== "all") ? lockedType : "nurse";
-    setForm({ ...emptyForm(), staffType: defaultType });
+    const defaultBranch = branches.length ? branches[0]._id : "";
+    setForm({ ...emptyForm(), staffType: defaultType, hospitalId: defaultBranch });
     setCreating(true);
   };
   const openEdit = (e) => { setForm(fromEmployee(e)); setEditing(e); };
@@ -130,7 +146,7 @@ export default function ManageEmployees() {
         toast("Employee updated", "success");
       } else {
         await client.post("/admin/employees", payload);
-        toast("Employee added", "success");
+        toast("Employee added to branch", "success");
       }
       setCreating(false); setEditing(null); load();
     } catch (err) { setError(err.response?.data?.error || "Could not save employee"); }
@@ -148,22 +164,21 @@ export default function ManageEmployees() {
   };
 
   const activeCategory = CATEGORIES.find((c) => c.key === type);
-  const employees = data?.employees || [];
+  if (!data) return <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4"><SkeletonCard /><SkeletonCard /><SkeletonCard /></div>;
 
-  if (!data) return <div className="grid md:grid-cols-3 gap-4"><SkeletonCard /><SkeletonCard /><SkeletonCard /></div>;
+  const employees = data.employees || [];
 
   return (
-    <div className="space-y-5 animate-fade-up">
+    <div className="space-y-6 animate-fade-up">
       {error && <p className="text-sm text-[var(--color-danger)] bg-[var(--color-danger-soft)] rounded-xl px-3 py-2">{error}</p>}
 
       <Card>
         <SectionTitle
           title={lockedType && lockedType !== "all" ? `${activeCategory?.label || "Employees"} directory` : `Staff directory — ${activeCategory?.label || "Employees"}`}
-          subtitle={`${data.total} employee${data.total === 1 ? "" : "s"} · employee numbers, contact and status`}
+          subtitle={`${data.total} employee${data.total === 1 ? "" : "s"} · employee numbers, branch location and status`}
           right={<Button onClick={openCreate}><IconPlus /> Add {lockedType && lockedType !== "all" ? (activeCategory?.label || "employee") : "employee"}</Button>}
         />
 
-        {/* Category filter — only shown on the "All Employees" route */}
         {(!lockedType || lockedType === "all") && (
           <div className="flex flex-wrap gap-2 mb-4">
             {CATEGORIES.map((c) => (
@@ -175,12 +190,23 @@ export default function ManageEmployees() {
           </div>
         )}
 
-        {/* Search + status */}
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-52">
             <IconSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-ink-soft)]" />
             <input className={`${inputClass} pl-10`} placeholder="Search by name, employee number, phone or email…" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && searchNow()} />
           </div>
+
+          {branches.length > 1 && (
+            <Select value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)} className="w-52 font-semibold">
+              <option value="all">📍 All Locations ({branches.length})</option>
+              {branches.map((b) => (
+                <option key={b._id} value={b._id}>
+                  {b.isBranch ? `🌿 ${b.name}` : `🏛️ ${b.name} (Main)`}
+                </option>
+              ))}
+            </Select>
+          )}
+
           <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-40">
             <option value="all">All statuses</option>
             <option value="active">Active</option>
@@ -189,12 +215,11 @@ export default function ManageEmployees() {
           <Button variant="ghost" onClick={searchNow}>Search</Button>
         </div>
 
-        {/* Employee cards */}
         {employees.length ? (
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
             {employees.map((e) => (
               <button key={e._id} onClick={() => setViewing(e)}
-                className="text-left border border-[var(--color-line)] rounded-2xl p-4 flex flex-col gap-3 hover:border-[var(--color-primary)] hover:shadow-sm transition-all">
+                className="text-left border border-[var(--color-line)] rounded-2xl p-4 flex flex-col gap-3 hover:border-[var(--color-primary)] hover:shadow-sm transition-all relative">
                 <div className="flex items-start gap-3">
                   <Avatar employee={e} className="w-14 h-14 text-sm" />
                   <div className="min-w-0 flex-1">
@@ -204,6 +229,15 @@ export default function ManageEmployees() {
                     </div>
                     <p className="font-[var(--font-mono)] text-xs text-[var(--color-primary)] mt-0.5">{e.employeeNumber || "—"}</p>
                     <p className="text-xs text-[var(--color-ink-soft)] mt-0.5 capitalize">{e.staffTypeLabel} · {e.designation || "—"}</p>
+                    {e.hospitalId?.name && (
+                      <span className={`inline-block text-[10px] font-extrabold px-2 py-0.5 rounded-full border mt-1 ${
+                        e.hospitalId?.isBranch
+                          ? "bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-300"
+                          : "bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border-blue-300"
+                      }`}>
+                        {e.hospitalId?.isBranch ? `🌿 ${e.hospitalId.name}` : `🏛️ ${e.hospitalId.name}`}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="text-xs text-[var(--color-ink-soft)] space-y-1 border-t border-[var(--color-line)] pt-2">
@@ -219,14 +253,27 @@ export default function ManageEmployees() {
             ))}
           </div>
         ) : (
-          <EmptyState icon={<IconUsers className="text-[var(--color-ink-soft)]" />} title="No employees found" hint="Try a different category or search term, or add an employee." />
+          <EmptyState icon={<IconUsers className="text-[var(--color-ink-soft)]" />} title="No employees found" hint="Try a different category, location, or search term." />
         )}
       </Card>
 
-      {/* Add / Edit modal */}
       <Modal open={creating || !!editing} onClose={() => { setCreating(false); setEditing(null); }} title={editing ? `Edit ${editing.name}` : `Add ${typeLabel}`} wide>
         <form className="space-y-4" onSubmit={submit}>
           <div className="grid sm:grid-cols-2 gap-3">
+            {branches.length > 1 && (
+              <div className="sm:col-span-2">
+                <Field label="Assign to Hospital / Branch Location" hint="Select which branch location this employee is assigned to">
+                  <Select value={form.hospitalId || ""} onChange={set("hospitalId")}>
+                    {branches.map((b) => (
+                      <option key={b._id} value={b._id}>
+                        {b.isBranch ? `🌿 ${b.name} (${b.code}${b.city ? ` - ${b.city}` : ""})` : `🏛️ ${b.name} (Main Network)`}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+            )}
+
             <Field label="Employee name"><input name="name" required className={inputClass} value={form.name} onChange={set("name")} /></Field>
             <Field label="Employee number" hint={editing?.employeeNumber ? "Leave blank to keep the current number" : "Optional — auto-assigned if left blank"}>
               <input name="employeeNumber" className={inputClass} value={form.employeeNumber} onChange={set("employeeNumber")} placeholder="EMP-DOC-0001" />
@@ -240,7 +287,9 @@ export default function ManageEmployees() {
             ) : (
               <Field label="Staff type"><Select name="staffType" value={form.staffType} onChange={set("staffType")}>{TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}</Select></Field>
             )}
-            <Field label="Designation"><input name="designation" className={inputClass} value={form.designation} onChange={set("designation")} placeholder="e.g. Head Nurse, Shift Supervisor" /></Field>
+            {!isDoctor && (
+              <Field label="Designation"><input name="designation" className={inputClass} value={form.designation} onChange={set("designation")} placeholder="e.g. Head Nurse, Shift Supervisor" /></Field>
+            )}
             <Field label="Department"><input name="department" className={inputClass} value={form.department} onChange={set("department")} placeholder="e.g. Emergency, General Ward" /></Field>
             <Field label="Phone number"><input name="phone" className={inputClass} value={form.phone} onChange={set("phone")} placeholder="e.g. 98765 43210" /></Field>
             <Field label="Email" hint={isLoginType ? "Used for this employee's login" : "Optional for non-login staff"}>

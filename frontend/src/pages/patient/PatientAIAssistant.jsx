@@ -103,6 +103,7 @@ export default function PatientAIAssistant() {
   const [inputText, setInputText] = useState("");
   const [documentText, setDocumentText] = useState("");
   const [fileName, setFileName] = useState("");
+  const [imageData, setImageData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [processingStep, setProcessingStep] = useState(0);
   const [result, setResult] = useState(null);
@@ -150,7 +151,21 @@ export default function PatientAIAssistant() {
     if (!file) return;
     setFileName(file.name);
 
-    if (file.type.startsWith("text/") || file.name.endsWith(".txt") || file.name.endsWith(".csv") || file.name.endsWith(".md") || file.name.endsWith(".json")) {
+    if (file.type.startsWith("image/") || file.name.endsWith(".png") || file.name.endsWith(".jpg") || file.name.endsWith(".jpeg") || file.name.endsWith(".webp") || file.name.endsWith(".bmp")) {
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const dataUrl = evt.target?.result;
+        if (dataUrl) {
+          const mimeType = file.type || "image/jpeg";
+          const base64 = String(dataUrl).split(",")[1] || "";
+          setImageData({ base64, mimeType, name: file.name, previewUrl: dataUrl });
+          setDocumentText(`[Prescription Image Uploaded: ${file.name}]`);
+          toast(`Prescription image "${file.name}" loaded for AI reading!`, "success");
+        }
+      };
+      reader.readAsDataURL(file);
+    } else if (file.type.startsWith("text/") || file.name.endsWith(".txt") || file.name.endsWith(".csv") || file.name.endsWith(".md") || file.name.endsWith(".json")) {
+      setImageData(null);
       const reader = new FileReader();
       reader.onload = (evt) => {
         setDocumentText(evt.target?.result || "");
@@ -158,6 +173,7 @@ export default function PatientAIAssistant() {
       };
       reader.readAsText(file);
     } else {
+      setImageData(null);
       setDocumentText(`[Attached Document File: ${file.name} (${(file.size / 1024).toFixed(1)} KB)]\nPatient medical document attachment ready for analysis.`);
       toast(`Attached file "${file.name}"`, "info");
     }
@@ -274,8 +290,8 @@ export default function PatientAIAssistant() {
     setResult(null);
 
     const combined = [inputText, documentText].filter(Boolean).join("\n\n");
-    if (!combined || combined.trim().length < 5) {
-      setError("Please type notes, load sample text, or upload a medical document first.");
+    if ((!combined || combined.trim().length < 5) && !imageData) {
+      setError("Please type notes, load sample text, or upload a medical document/prescription image first.");
       return;
     }
 
@@ -285,6 +301,7 @@ export default function PatientAIAssistant() {
         mode: activeTool.id,
         inputText,
         documentText,
+        imageData,
       });
 
       if (data.success) {
@@ -438,11 +455,38 @@ export default function PatientAIAssistant() {
                 </label>
               </div>
 
-              {documentText && (
+              {/* Prescription Image Preview */}
+              {imageData && imageData.previewUrl && (
+                <div className="p-3.5 rounded-2xl bg-[var(--color-surface-2)] border border-[var(--color-primary-soft)] text-xs flex flex-wrap items-center justify-between gap-3 shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <img
+                      src={imageData.previewUrl}
+                      alt="Prescription Preview"
+                      className="w-16 h-16 object-cover rounded-xl border border-[var(--color-line)] shadow-sm shrink-0"
+                    />
+                    <div>
+                      <p className="font-bold text-[var(--color-ink)] flex items-center gap-1.5">
+                        <span>🩺 Prescription Image Attached</span>
+                      </p>
+                      <p className="text-[11px] text-[var(--color-ink-soft)] font-mono truncate max-w-xs">{imageData.name}</p>
+                      <p className="text-[10px] text-[var(--color-primary)] font-semibold mt-0.5">✨ Gemini Vision will read handwritten & printed prescription text</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setImageData(null); setDocumentText(""); setFileName(""); }}
+                    className="px-3 py-1.5 rounded-xl text-xs font-bold bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 hover:bg-red-100 transition-all cursor-pointer"
+                  >
+                    Remove Image ✕
+                  </button>
+                </div>
+              )}
+
+              {documentText && !imageData && (
                 <div className="p-2.5 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-line)] text-xs">
                   <div className="flex justify-between items-center mb-1">
                     <span className="font-semibold text-[var(--color-ink)]">Document Content Ready</span>
-                    <button type="button" onClick={() => { setDocumentText(""); setFileName(""); }} className="text-red-500 text-[10px] font-bold hover:underline">
+                    <button type="button" onClick={() => { setDocumentText(""); setFileName(""); setImageData(null); }} className="text-red-500 text-[10px] font-bold hover:underline">
                       Remove ✕
                     </button>
                   </div>

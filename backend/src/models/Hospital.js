@@ -13,11 +13,19 @@ const hospitalSchema = new mongoose.Schema(
     country: { type: String, trim: true, maxlength: 100 },
     status: { type: String, enum: ["active", "inactive"], default: "active", index: true },
     admin: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
+
+    // Branch Network & Approval Fields
+    isBranch: { type: Boolean, default: false, index: true },
+    parentHospital: { type: mongoose.Schema.Types.ObjectId, ref: "Hospital", index: true },
+    approvalStatus: { type: String, enum: ["approved", "pending", "rejected"], default: "approved", index: true },
+    requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
+    rejectionReason: { type: String, default: "" },
   },
   { timestamps: true },
 );
 
 hospitalSchema.index({ name: 1 });
 hospitalSchema.index({ status: 1, createdAt: -1 });
+hospitalSchema.index({ approvalStatus: 1, createdAt: -1 });
 
 export default mongoose.model("Hospital", hospitalSchema);

@@ -81,6 +81,14 @@ export const selectClass =
 
 export function TextInput(props) { return <input className={inputClass} {...props} />; }
 
+function getTextContent(node) {
+  if (node === null || node === undefined) return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(getTextContent).join("");
+  if (React.isValidElement(node)) return getTextContent(node.props.children);
+  return "";
+}
+
 /* ---------- Extraordinary Custom Select Component ---------- */
 export function Select({ value, onChange, children, className = "", placeholder = "Select...", disabled = false, required = false, name, defaultValue, id }) {
   const [open, setOpen] = useState(false);
@@ -100,6 +108,7 @@ export function Select({ value, onChange, children, className = "", placeholder 
       options.push({
         value: val,
         label: child.props.children,
+        textLabel: getTextContent(child.props.children),
         disabled: child.props.disabled,
       });
     }
@@ -111,7 +120,8 @@ export function Select({ value, onChange, children, className = "", placeholder 
 
   const filteredOptions = options.filter((opt) => {
     if (!search) return true;
-    return String(opt.label).toLowerCase().includes(search.toLowerCase());
+    const txt = opt.textLabel || getTextContent(opt.label);
+    return txt.toLowerCase().includes(search.toLowerCase());
   });
 
   const handleSelect = (val) => {
@@ -333,24 +343,24 @@ export function StatusBadge({ status, className = "" }) {
   );
 }
 
-/* ---------- Ice-Blue Stat Card (Reference Screenshot 1) ---------- */
-export function StatCard({ label, value, sub, icon, trend = "12.8% the last month", tint = "primary" }) {
+/* ---------- Ice-Blue Stat Card ---------- */
+export function StatCard({ label, value, sub, icon, trend, tint = "primary" }) {
   return (
-    <div className="glass-card-hover animate-stat-in relative overflow-hidden rounded-3xl p-5 bg-[var(--color-surface)] border border-[var(--color-line)] shadow-sm flex flex-col justify-between transition-colors">
+    <div className="glass-card-hover animate-stat-in relative overflow-hidden rounded-3xl p-5 bg-[var(--color-surface)] border border-[var(--color-line)] shadow-sm flex flex-col justify-between transition-all duration-200">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-full border border-blue-500/20 bg-blue-500/10 text-blue-600 dark:text-blue-400 grid place-items-center text-sm font-semibold">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-9 h-9 rounded-2xl border border-blue-500/20 bg-blue-500/10 text-blue-600 dark:text-blue-400 grid place-items-center text-sm font-semibold shrink-0">
             {icon || "📊"}
           </div>
-          <p className="text-sm font-semibold text-[var(--color-ink)] truncate">{label}</p>
+          <p className="text-sm font-bold text-[var(--color-ink)] truncate">{label}</p>
         </div>
-        <button className="text-[var(--color-ink-soft)] hover:text-[var(--color-primary)] text-lg leading-none p-1 font-bold" title="Options">⋮</button>
+        <button className="text-[var(--color-ink-soft)] hover:text-[var(--color-primary)] text-lg leading-none p-1 font-bold shrink-0" title="Options">⋮</button>
       </div>
 
-      <div className="mt-4 flex items-baseline gap-3">
-        <span className="text-3xl font-bold text-[var(--color-ink)] tracking-tight tabular-nums font-[var(--font-mono)]">{value}</span>
+      <div className="mt-4 flex flex-wrap items-baseline gap-2 min-w-0">
+        <span className="text-2xl sm:text-3xl font-extrabold text-[var(--color-ink)] tracking-tight tabular-nums font-[var(--font-mono)] truncate">{value}</span>
         {trend && (
-          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[var(--color-primary)] bg-[var(--color-primary-soft)] px-2 py-0.5 rounded-full">
+          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[var(--color-primary)] bg-[var(--color-primary-soft)] px-2.5 py-0.5 rounded-full shrink-0">
             <span>↗</span> {trend}
           </span>
         )}
@@ -358,7 +368,7 @@ export function StatCard({ label, value, sub, icon, trend = "12.8% the last mont
 
       {sub && (
         <div className="mt-3 pt-2.5 border-t border-[var(--color-line)] text-xs text-[var(--color-ink-soft)] font-medium flex items-center justify-between">
-          <span>{sub}</span>
+          <span className="truncate">{sub}</span>
         </div>
       )}
     </div>

@@ -19,6 +19,42 @@ const money = (amount) =>
     maximumFractionDigits: 0,
   }).format(amount || 0);
 
+function formatShortVisitingHours(hoursStr) {
+  if (!hoursStr) return "OPD Hours";
+  const s = String(hoursStr).trim();
+  if (s.length <= 32) return s;
+
+  const parts = s.split(/,\s*/).map((p) => p.trim()).filter(Boolean);
+  if (!parts.length) return s;
+
+  const dayEntries = parts.map((p) => {
+    const match = p.match(/^([A-Za-z]{3})\s*(.*)$/);
+    return match ? { day: match[1], time: match[2].trim() } : { day: "", time: p };
+  });
+
+  const hasDays = dayEntries.some((e) => e.day);
+  if (hasDays) {
+    const times = dayEntries.map((e) => e.time).filter(Boolean);
+    const mainTime = times[0];
+    const sameTime = times.every((t) => t === mainTime);
+
+    if (sameTime && mainTime) {
+      const days = dayEntries.map((e) => e.day).filter(Boolean);
+      if (days.length >= 6) {
+        return `Mon - Sat: ${mainTime}`;
+      } else if (days.length >= 2) {
+        return `${days[0]} - ${days[days.length - 1]}: ${mainTime}`;
+      }
+      return `OPD: ${mainTime}`;
+    }
+
+    const uniqueTimes = Array.from(new Set(times));
+    return `OPD Hours: ${uniqueTimes[0]}${uniqueTimes.length > 1 ? "..." : ""}`;
+  }
+
+  return s.length > 35 ? `${s.slice(0, 32)}...` : s;
+}
+
 function Prescription({ report }) {
   const download = () => {
     const lines = [
@@ -177,8 +213,8 @@ function Patient() {
                 )}
               </div>
               <p className="text-sm mt-1">{d.profile?.specialty}</p>
-              <p className="text-xs text-[var(--color-ink-soft)] mt-2">
-                {d.profile?.location} · {d.profile?.visitingHours}
+              <p className="text-xs text-[var(--color-ink-soft)] mt-2" title={d.profile?.visitingHours}>
+                {d.profile?.location} · {formatShortVisitingHours(d.profile?.visitingHours)}
               </p>
               <p className="text-sm font-medium mt-2">
                 {money(d.profile?.consultationFee)}

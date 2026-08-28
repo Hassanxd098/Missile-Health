@@ -80,16 +80,58 @@ export function visitingTextToSlots(text) {
   return slots;
 }
 
-// Structured slots -> human text for display ("Mon 10:00 AM-2:00 PM").
+// Structured slots -> compact human text for display ("Mon–Sat 10:00 AM-2:00 PM; Thu 5:00 PM-8:00 PM").
 export function visitingTextFromSlots(slots) {
+  if (!slots || !slots.length) return "";
   const byDay = {};
-  (slots || []).forEach((s) => {
-    (byDay[s.day] = byDay[s.day] || []).push(s);
+  slots.forEach((s) => {
+    if (s.start && s.end) {
+      const d = Number(s.day);
+      if (!byDay[d]) byDay[d] = [];
+      byDay[d].push(s);
+    }
   });
-  return Object.keys(byDay)
-    .map(Number)
-    .sort((a, b) => a - b)
-    .map((day) => `${DAYS[day].slice(0, 3)} ${byDay[day].map((s) => `${fmt12(toMin(s.start))}-${fmt12(toMin(s.end))}`).join(", ")}`)
+
+  const days = Object.keys(byDay).map(Number).sort((a, b) => a - b);
+  if (!days.length) return "";
+
+  const formatDayTimes = (daySlots) => {
+    return daySlots
+      .map((s) => `${fmt12(toMin(s.start))}-${fmt12(toMin(s.end))}`)
+      .join(", ");
+  };
+
+  const timeGroupMap = {};
+  days.forEach((d) => {
+    const timeStr = formatDayTimes(byDay[d]);
+    if (!timeGroupMap[timeStr]) timeGroupMap[timeStr] = [];
+    timeGroupMap[timeStr].push(d);
+  });
+
+  const formatDayList = (dayList) => {
+    if (dayList.length === 7) return "Daily";
+    if (dayList.length === 6 && !dayList.includes(0)) return "Mon–Sat";
+    if (dayList.length === 5 && dayList.every((d, i) => d === i + 1)) return "Mon–Fri";
+
+    const segments = [];
+    let start = dayList[0];
+    let prev = start;
+
+    for (let i = 1; i < dayList.length; i++) {
+      if (dayList[i] === prev + 1) {
+        prev = dayList[i];
+      } else {
+        segments.push(start === prev ? DAYS[start].slice(0, 3) : `${DAYS[start].slice(0, 3)}–${DAYS[prev].slice(0, 3)}`);
+        start = dayList[i];
+        prev = start;
+      }
+    }
+    segments.push(start === prev ? DAYS[start].slice(0, 3) : `${DAYS[start].slice(0, 3)}–${DAYS[prev].slice(0, 3)}`);
+    return segments.join(", ");
+  };
+
+  return Object.entries(timeGroupMap)
+    .map(([timeStr, dayList]) => `${formatDayList(dayList)} ${timeStr}`)
     .join("; ");
 }
 
@@ -195,4 +237,55 @@ export function slotStarts(doctor, date) {
     if (d.getTime() > now) times.push(d);
   });
   return { times, slotMinutes: gen.slotMinutes, breakMinutes: gen.breakMinutes };
+}
+
+// Ensures no two active appointments for a doctor on a given day share the exact same scheduledFor time or duplicate token.
+// Staggers clashing times by 15 minutes and re-indexes tokens as T01, T02, T03... in chronological order.
+export async function sanitizeDoctorDayQueue(doctorId, date = new Date()) {
+  try {
+    const Appointment = (await import("../models/Appointment.js")).default;
+    const start = new Date(date); start.setHours(0, 0, 0, 0);
+    const end = new Date(start); end.setDate(end.getDate() + 1);
+
+    const appointments = await Appointment.find({
+      doctor: doctorId,
+      scheduledFor: { $gte: start, $lt: end },
+      status: { $nin: ["cancelled", "missed"] },
+    }).sort({ scheduledFor: 1, createdAt: 1 });
+
+    if (!appointments || !appointments.length) return;
+
+    const usedTimes = new Set();
+    const slotMinutes = 15;
+
+    for (let i = 0; i < appointments.length; i++) {
+      const appt = appointments[i];
+      let timeMs = new Date(appt.scheduledFor).getTime();
+
+      // If another patient is already scheduled at this exact time, stagger forward by slotMinutes
+      while (usedTimes.has(timeMs)) {
+        timeMs += slotMinutes * 60000;
+      }
+
+      usedTimes.add(timeMs);
+      const newScheduledFor = new Date(timeMs);
+      const tokenStr = `T${String(i + 1).padStart(2, "0")}`;
+
+      let updated = false;
+      if (appt.scheduledFor.getTime() !== newScheduledFor.getTime()) {
+        appt.scheduledFor = newScheduledFor;
+        updated = true;
+      }
+      if (appt.token !== tokenStr) {
+        appt.token = tokenStr;
+        updated = true;
+      }
+
+      if (updated) {
+        await appt.save();
+      }
+    }
+  } catch (err) {
+    console.error("Error sanitizing doctor day queue:", err);
+  }
 }

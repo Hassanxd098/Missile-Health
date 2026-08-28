@@ -33,9 +33,11 @@ import ManageAdmins from "./pages/admin/ManageAdmins";
 import ManagePatients from "./pages/admin/ManagePatients";
 import AdminAppointments from "./pages/admin/AdminAppointments";
 import Reports from "./pages/admin/Reports";
+import BranchRequests from "./pages/hospital/BranchRequests";
 
 const HOSPITAL_ADMIN_ROUTES = [
   ["/app/hospital/dashboard", AdminDashboard],
+  ["/app/hospital/branch-requests", BranchRequests],
   ["/app/hospital/doctors", ManageDoctors],
   ["/app/hospital/pharmacy", ManagePharmacy],
   ["/app/hospital/employees", ManageEmployees],
@@ -91,8 +93,7 @@ function RequireShell({ role, children }) {
 
   // Super admin navigates to /super-admin routes
   if (patient.role === "superadmin") {
-    if (role !== "superadmin") return <Navigate to="/super-admin/dashboard" replace />;
-    return children;
+    return <AppShell>{children}</AppShell>;
   }
 
   // Hospital admin routes
@@ -128,7 +129,17 @@ export default function App() {
             <Route path="/super-admin/login" element={<SuperAdminLogin />} />
             <Route path="/" element={<HomeRedirect />} />
             {/* Super Admin routes */}
+            <Route path="/super-admin" element={<Navigate to="/super-admin/dashboard" replace />} />
             <Route path="/super-admin/dashboard" element={
+              <RequireShell role="superadmin"><SuperAdminDashboard /></RequireShell>
+            } />
+            <Route path="/super-admin/hospitals" element={
+              <RequireShell role="superadmin"><SuperAdminDashboard /></RequireShell>
+            } />
+            <Route path="/super-admin/branch-requests" element={
+              <RequireShell role="superadmin"><SuperAdminDashboard /></RequireShell>
+            } />
+            <Route path="/super-admin/employees" element={
               <RequireShell role="superadmin"><SuperAdminDashboard /></RequireShell>
             } />
             {/* Hospital / standard app routes */}

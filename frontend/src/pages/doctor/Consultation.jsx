@@ -1189,17 +1189,17 @@ export default function Consultation() {
   const vitals = [
     [
       "Blood group",
-      p.bloodGroup,
+      p.bloodGroup || patient?.profile?.bloodGroup,
     ],
 
     [
       "BP",
-      p.bloodPressure,
+      p.bloodPressure || patient?.profile?.bloodPressure,
     ],
 
     [
       "Sugar",
-      p.sugarLevel,
+      p.sugarLevel || patient?.profile?.sugarLevel,
     ],
 
     [
@@ -1215,6 +1215,21 @@ export default function Consultation() {
     [
       "O2",
       p.oxygenLevel,
+    ],
+
+    [
+      "Height",
+      (p.heightCm || patient?.profile?.heightCm) ? `${p.heightCm || patient?.profile?.heightCm} cm` : "",
+    ],
+
+    [
+      "Weight",
+      (p.weightKg || patient?.profile?.weightKg) ? `${p.weightKg || patient?.profile?.weightKg} kg` : "",
+    ],
+
+    [
+      "BMI",
+      p.bmi || patient?.profile?.bmi,
     ],
 
     [
@@ -1630,6 +1645,37 @@ export default function Consultation() {
 
             </div>
 
+          </Card>
+
+          {/* PATIENT FILLED MEDICAL INTAKE */}
+          <Card>
+            <h2 className="mb-3 font-semibold text-[var(--color-ink)]">
+              Patient Medical Intake
+            </h2>
+            <div className="space-y-2 text-xs">
+              <div className="bg-[var(--color-surface-2)] p-2.5 rounded-xl border border-[var(--color-line)]">
+                <p className="font-semibold text-[var(--color-ink)]">⚠️ Allergies</p>
+                <p className="text-[var(--color-ink-soft)] mt-0.5">{p.allergies || "None declared"}</p>
+              </div>
+              <div className="bg-[var(--color-surface-2)] p-2.5 rounded-xl border border-[var(--color-line)]">
+                <p className="font-semibold text-[var(--color-ink)]">💊 Current Medicines</p>
+                <p className="text-[var(--color-ink-soft)] mt-0.5">{p.currentMedicines || "None declared"}</p>
+              </div>
+              <div className="bg-[var(--color-surface-2)] p-2.5 rounded-xl border border-[var(--color-line)]">
+                <p className="font-semibold text-[var(--color-ink)]">🏥 Existing Diseases</p>
+                <p className="text-[var(--color-ink-soft)] mt-0.5">{p.existingDiseases || "None declared"}</p>
+              </div>
+              <div className="bg-[var(--color-surface-2)] p-2.5 rounded-xl border border-[var(--color-line)]">
+                <p className="font-semibold text-[var(--color-ink)]">📜 Past Medical History</p>
+                <p className="text-[var(--color-ink-soft)] mt-0.5">{p.medicalHistory || p.previousDiseases || "None declared"}</p>
+              </div>
+              {patient?.emergencyContact?.name && (
+                <div className="bg-[var(--color-surface-2)] p-2.5 rounded-xl border border-[var(--color-line)]">
+                  <p className="font-semibold text-[var(--color-ink)]">📞 Emergency Contact</p>
+                  <p className="text-[var(--color-ink-soft)] mt-0.5">{patient.emergencyContact.name} ({patient.emergencyContact.relation || "Contact"}) · {patient.emergencyContact.phone || "—"}</p>
+                </div>
+              )}
+            </div>
           </Card>
 
           {/* PREVIOUS VISITS */}

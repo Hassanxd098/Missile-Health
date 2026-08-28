@@ -23,8 +23,8 @@ const appointmentSchema = new mongoose.Schema({
     index: true,
   },
 
-  // Who created the booking ("self" = patient portal, "reception" = desk).
-  source: { type: String, enum: ["self", "reception"], default: "self" },
+  // Who created the booking ("self" = patient portal, "reception" = desk, "doctor" / "doctor-followup" = doctor).
+  source: { type: String, enum: ["self", "reception", "doctor", "doctor-followup", "referral"], default: "self" },
 
   // Cash collected at the desk when a receptionist books an appointment.
   paidAt: { type: Date },

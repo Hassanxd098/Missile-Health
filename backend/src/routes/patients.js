@@ -9,7 +9,7 @@ import Prescription from "../models/Prescription.js";
 import Invoice from "../models/Invoice.js";
 import Notification from "../models/Notification.js";
 import { notify } from "../services/notificationService.js";
-import { generateDoctorSlots } from "../services/availabilityService.js";
+import { generateDoctorSlots, sanitizeDoctorDayQueue } from "../services/availabilityService.js";
 
 const router = Router();
 router.use(requireAuth, allowRoles("patient"));
@@ -252,10 +252,10 @@ router.post("/appointments", async (req, res, next) => {
     });
 
     const [start] = dayWindow(slot);
-    const end = new Date(start); end.setDate(end.getDate() + 1);
-    const seq = await Appointment.countDocuments({ doctor: doctor._id, scheduledFor: { $gte: start, $lt: end }, status: { $ne: "cancelled" } });
-    appointment.token = `T${String(seq).padStart(2, "0")}`;
-    await appointment.save();
+    await sanitizeDoctorDayQueue(doctor._id, start);
+    const freshAppt = await Appointment.findById(appointment._id).lean();
+    if (freshAppt?.token) appointment.token = freshAppt.token;
+    if (freshAppt?.scheduledFor) appointment.scheduledFor = freshAppt.scheduledFor;
 
     await notify(req.user._id, {
       title: "Appointment confirmed",

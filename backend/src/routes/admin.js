@@ -1,7 +1,9 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import mongoose from "mongoose";
 import { requireAuth, allowRoles, hospitalScope } from "../middleware/authJwt.js";
 import User from "../models/User.js";
+import Hospital from "../models/Hospital.js";
 import Appointment from "../models/Appointment.js";
 import Prescription from "../models/Prescription.js";
 import Invoice from "../models/Invoice.js";
@@ -10,7 +12,7 @@ import Attendance from "../models/Attendance.js";
 import { notify } from "../services/notificationService.js";
 import { logAudit } from "../services/auditService.js";
 import { visitingTextToSlots, defaultAvailability } from "../services/availabilityService.js";
-import { generateEmployeeNumber } from "../services/idService.js";
+import { generateEmployeeNumber, generateHospitalId } from "../services/idService.js";
 
 const router = Router();
 router.use(requireAuth, allowRoles("admin", "hospital_admin"));
@@ -286,6 +288,30 @@ router.get("/staff-groups", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// ---------- Hospital Network & Branch Directory ----------
+router.get("/my-branches", async (req, res, next) => {
+  try {
+    let parentId = req.user.hospitalId;
+    if (!parentId) {
+      const parentDoc = (await Hospital.findOne({ admin: req.user._id, isBranch: false })) || (await Hospital.findOne({ admin: req.user._id }));
+      if (parentDoc) parentId = parentDoc._id;
+    }
+
+    const branches = await Hospital.find({
+      $or: [
+        ...(parentId ? [{ _id: parentId }, { parentHospital: parentId }] : []),
+        { admin: req.user._id },
+        { requestedBy: req.user._id },
+      ],
+      status: "active",
+    }).select("name code city isBranch parentHospital").sort({ isBranch: 1, name: 1 }).lean();
+
+    res.json({ branches, mainHospitalId: parentId });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ---------- Employee directory (Admin → Staff / Employees) ----------
 // Shapes a User record into a uniform employee payload for the staff directory.
 const employeeJson = (u) => ({
@@ -297,6 +323,7 @@ const employeeJson = (u) => ({
   staffType: u.role,
   staffTypeLabel: STAFF_TYPE_LABELS[u.role] || u.role,
   employeeNumber: u.employeeNumber || null,
+  hospitalId: u.hospitalId || null,
   isLogin: LOGIN_EMPLOYEE_ROLES.includes(u.role) && !!u.passwordHash,
   photo: u.profile?.profilePhoto || "",
   designation: u.profile?.designation || "",
@@ -326,14 +353,19 @@ async function ensureEmployeeNumbers(scope) {
   }
 }
 
-// List employees with category / search / status filters.
+// List employees with category / search / status / hospital branch filters.
 router.get("/employees", async (req, res, next) => {
   try {
     const scope = hospitalScope(req.user);
     await ensureEmployeeNumbers(scope);
-    const { type = "all", q = "", status = "all", page = 1, limit = 100 } = req.query;
+    const { type = "all", q = "", status = "all", hospitalId, page = 1, limit = 100 } = req.query;
     const roles = EMPLOYEE_CATEGORIES[type] || EMPLOYEE_CATEGORIES.all;
     const query = { ...scope, role: { $in: roles } };
+
+    if (hospitalId && hospitalId !== "all" && mongoose.Types.ObjectId.isValid(hospitalId)) {
+      query.hospitalId = hospitalId;
+    }
+
     if (status === "active") query.active = true;
     if (status === "inactive") query.active = { $ne: true };
     if (q) {
@@ -341,7 +373,7 @@ router.get("/employees", async (req, res, next) => {
       query.$or = [{ name: rx }, { employeeNumber: rx }, { mobile: rx }, { email: rx }, { "profile.designation": rx }, { "profile.department": rx }];
     }
     const [employees, total] = await Promise.all([
-      User.find(query).select(employeeFields).sort({ name: 1 }).skip((Math.max(Number(page), 1) - 1) * Number(limit)).limit(Number(limit)).lean(),
+      User.find(query).select(employeeFields).populate("hospitalId", "name code city isBranch").sort({ name: 1 }).skip((Math.max(Number(page), 1) - 1) * Number(limit)).limit(Number(limit)).lean(),
       User.countDocuments(query),
     ]);
     res.json({ employees: employees.map(employeeJson), total, type, page: Number(page) });
@@ -350,8 +382,9 @@ router.get("/employees", async (req, res, next) => {
 
 function employeeProfileFrom(body) {
   const salary = Number(body.salary);
+  const isDoctor = body.staffType === "doctor" || body.role === "doctor";
   return {
-    designation: String(body.designation || "").trim(),
+    designation: isDoctor ? "" : String(body.designation || "").trim(),
     department: String(body.department || "").trim(),
     phone: String(body.phone || "").trim(),
     gender: String(body.gender || "").trim(),
@@ -389,21 +422,37 @@ async function assertEmployeeNumberFree(hospitalId, employeeNumber, excludeId) {
 // types are directory-only records (no login).
 router.post("/employees", async (req, res, next) => {
   try {
-    const { name, staffType, employeeNumber, email, password } = req.body;
+    const { name, staffType, employeeNumber, email, password, hospitalId: bodyHospitalId } = req.body;
     if (!name || !EMPLOYEE_CATEGORIES.all.includes(staffType)) {
       return res.status(400).json({ error: "Employee name and a valid staff type are required" });
     }
+
+    let targetHospitalId = bodyHospitalId || req.user.hospitalId;
+    if (targetHospitalId && String(targetHospitalId) !== String(req.user.hospitalId) && mongoose.Types.ObjectId.isValid(targetHospitalId)) {
+      const isAuthorized = await Hospital.exists({
+        _id: targetHospitalId,
+        $or: [
+          { _id: req.user.hospitalId },
+          { parentHospital: req.user.hospitalId },
+          { admin: req.user._id },
+        ],
+      });
+      if (!isAuthorized && req.user.role !== "superadmin") {
+        targetHospitalId = req.user.hospitalId;
+      }
+    }
+
     if (LOGIN_EMPLOYEE_ROLES.includes(staffType)) {
       if (!email || !password || password.length < 8) {
         return res.status(400).json({ error: `${STAFF_TYPE_LABELS[staffType]} employees need an email and an 8-character password so they can log in` });
       }
     }
     const normalizedEmail = String(email || "").toLowerCase().trim();
-    const normalized = await assertEmployeeNumberFree(req.user.hospitalId, employeeNumber);
-    const finalNumber = normalized || await generateEmployeeNumber(req.user.hospitalId, staffType);
+    const normalized = await assertEmployeeNumberFree(targetHospitalId, employeeNumber);
+    const finalNumber = normalized || await generateEmployeeNumber(targetHospitalId, staffType);
     // Directory-only records may skip email; derive a hospital-scoped placeholder
     // so the global email unique index is never violated while staying unique.
-    const placeholderEmail = normalizedEmail || `staff.${finalNumber.toLowerCase()}@${req.user.hospitalId}.local`;
+    const placeholderEmail = normalizedEmail || `staff.${finalNumber.toLowerCase()}@${targetHospitalId}.local`;
     if (await User.exists({ email: placeholderEmail })) {
       const error = new Error(normalizedEmail ? "An employee with this email already exists" : "Could not assign a unique email. Please set one manually.");
       error.status = 409;
@@ -420,11 +469,11 @@ router.post("/employees", async (req, res, next) => {
       passwordHash: await bcrypt.hash(password || `emp-${Date.now()}-secret`, 12),
       role: staffType,
       employeeNumber: finalNumber,
-      hospitalId: req.user.hospitalId,
+      hospitalId: targetHospitalId,
       profile,
     });
-    logAudit({ actor: req.user._id, actorRole: req.user.role, action: "employee.create", entity: "user", entityId: user._id, meta: { staffType, employeeNumber: finalNumber, hospitalId: req.user.hospitalId } });
-    res.status(201).json({ employee: employeeJson(await User.findById(user._id).select(employeeFields).lean()) });
+    logAudit({ actor: req.user._id, actorRole: req.user.role, action: "employee.create", entity: "user", entityId: user._id, meta: { staffType, employeeNumber: finalNumber, hospitalId: targetHospitalId } });
+    res.status(201).json({ employee: employeeJson(await User.findById(user._id).select(employeeFields).populate("hospitalId", "name code city isBranch").lean()) });
   } catch (error) {
     if (isUniqueMongoError(error)) return res.status(409).json({ error: "A record with that employee number or email already exists" });
     res.status(error.status || 500).json({ error: error.message || "Could not add employee" });
@@ -659,6 +708,98 @@ router.get("/reports", async (req, res, next) => {
     if (req.user.role === "superadmin") return res.json(revenueReport);
     res.json({ patientGrowth, appointments, prescriptions, ...revenueReport });
   } catch (error) { next(error); }
+});
+
+// ---------- Hospital Branch Requests (Hospital Admin) ----------
+router.post("/branch-requests", async (req, res, next) => {
+  try {
+    const { name, code, email, phone, address, city, state, country } = req.body;
+    if (!name || !code) {
+      return res.status(400).json({ success: false, error: "Branch name and branch code are required", message: "Branch name and branch code are required" });
+    }
+
+    const normalizedCode = String(code).toUpperCase().trim();
+    const exists = await Hospital.exists({ code: normalizedCode });
+    if (exists) {
+      return res.status(409).json({ success: false, error: `A hospital or branch with code '${normalizedCode}' already exists`, message: `A hospital or branch with code '${normalizedCode}' already exists` });
+    }
+
+    let parentHospitalId = req.user.hospitalId;
+    if (!parentHospitalId) {
+      const parentDoc = (await Hospital.findOne({ admin: req.user._id, isBranch: false })) || (await Hospital.findOne({ admin: req.user._id }));
+      if (parentDoc) parentHospitalId = parentDoc._id;
+    }
+
+    const hospitalId = await generateHospitalId(normalizedCode);
+
+    const branchData = {
+      hospitalId,
+      code: normalizedCode,
+      name: String(name).trim(),
+      email: email ? String(email).trim() : "",
+      phone: phone ? String(phone).trim() : "",
+      address: address ? String(address).trim() : "",
+      city: city ? String(city).trim() : "",
+      state: state ? String(state).trim() : "",
+      country: country ? String(country).trim() : "",
+      status: "inactive",
+      admin: req.user._id,
+      isBranch: true,
+      approvalStatus: "pending",
+      requestedBy: req.user._id,
+    };
+
+    if (parentHospitalId && mongoose.Types.ObjectId.isValid(parentHospitalId)) {
+      branchData.parentHospital = parentHospitalId;
+    }
+
+    const branch = await Hospital.create(branchData);
+
+    try {
+      logAudit({
+        actor: req.user._id,
+        actorRole: req.user.role || "hospital_admin",
+        action: "hospital_branch.request",
+        entity: "hospital",
+        entityId: branch._id,
+        meta: { name: branch.name, code: branch.code, parentHospital: parentHospitalId },
+      });
+    } catch {
+      /* audit non-blocking */
+    }
+
+    res.status(201).json({ success: true, branchRequest: branch, branch });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/branch-requests", async (req, res, next) => {
+  try {
+    let parentHospitalId = req.user.hospitalId;
+    if (!parentHospitalId) {
+      const parentDoc = (await Hospital.findOne({ admin: req.user._id, isBranch: false })) || (await Hospital.findOne({ admin: req.user._id }));
+      if (parentDoc) parentHospitalId = parentDoc._id;
+    }
+
+    const query = {
+      $or: [
+        ...(parentHospitalId ? [{ parentHospital: parentHospitalId }] : []),
+        { admin: req.user._id },
+        { requestedBy: req.user._id },
+      ],
+      isBranch: true,
+    };
+
+    const branches = await Hospital.find(query)
+      .populate("parentHospital", "name code city")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json({ branchRequests: branches });
+  } catch (error) {
+    next(error);
+  }
 });
 
 export default router;

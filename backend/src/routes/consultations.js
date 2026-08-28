@@ -37,8 +37,31 @@ router.get("/doctor/patients/:patientId", allowRoles("doctor"), async (req, res,
 router.put("/doctor/consultations/:appointmentId", allowRoles("doctor"), async (req, res, next) => {
   try {
     const scope = hospitalScope(req.user);
-    const appointment = await Appointment.findOne({ ...scope, _id: req.params.appointmentId, doctor: req.user._id, status: { $nin: ["completed", "cancelled", "missed"] } });
-    if (!appointment) return res.status(404).json({ error: "Appointment not found or no longer active" });
+    let appointment = await Appointment.findOne({
+      ...scope,
+      _id: req.params.appointmentId,
+      doctor: req.user._id,
+    });
+
+    if (!appointment) {
+      // Fallback lookup without strict hospital scope (e.g. legacy/migrated records or unassigned hospitalId)
+      appointment = await Appointment.findOne({
+        _id: req.params.appointmentId,
+        doctor: req.user._id,
+      });
+      if (appointment && !appointment.hospitalId && req.user.hospitalId) {
+        appointment.hospitalId = req.user.hospitalId;
+        await appointment.save();
+      }
+    }
+
+    if (!appointment) {
+      return res.status(404).json({ error: "Appointment not found for this doctor" });
+    }
+
+    if (["cancelled", "missed"].includes(appointment.status)) {
+      return res.status(400).json({ error: "Cannot submit consultation for a cancelled or missed appointment" });
+    }
 
     const {
       assessment, diagnosis, chiefComplaint, clinicalFindings, advice, followUpDate, labTests = [],
@@ -63,12 +86,14 @@ router.put("/doctor/consultations/:appointmentId", allowRoles("doctor"), async (
 
     const doctor = await User.findById(req.user._id).lean();
 
+    const targetHospitalId = req.user.hospitalId || appointment.hospitalId;
+
     // 1. Clinical note (legacy patient reports source) — scoped to hospital.
     const note = await ClinicalNote.findOneAndUpdate(
-      { ...scope, appointment: appointment._id },
+      { appointment: appointment._id },
       {
         $set: {
-          hospitalId: req.user.hospitalId,
+          hospitalId: targetHospitalId,
           patient: appointment.patient,
           doctor: req.user._id,
           assessment: assessment || diagnosis,
@@ -90,54 +115,120 @@ router.put("/doctor/consultations/:appointmentId", allowRoles("doctor"), async (
       { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true },
     );
 
-    // 2. Formal prescription forwarded to pharmacy — scoped to hospital.
-    const prescriptionId = generatePrescriptionId();
-    const rx = await Prescription.create({
-      hospitalId: req.user.hospitalId,
-      prescriptionId,
-      appointment: appointment._id,
-      patient: appointment.patient,
-      doctor: req.user._id,
-      diagnosis: diagnosis || assessment || "",
-      chiefComplaint: chiefComplaint || "",
-      clinicalFindings: clinicalFindings || "",
-      advice: advice || "",
-      followUpDate: followUpDate ? new Date(followUpDate) : undefined,
-      labTests: (Array.isArray(labTests) ? labTests : []).map((t) => String(t).trim()).filter(Boolean),
-      doctorNotes: doctorNotes || "",
-      doctorSignature: doctorSignature || doctor?.name || "",
-      medicines: norm,
-      totalMedicines: norm.length,
-      status: sendToPharmacy ? "sent-to-pharmacy" : "new",
-      submittedToPharmacyAt: sendToPharmacy ? new Date() : undefined,
-    });
+    // 2. Formal prescription forwarded to pharmacy — check for existing or create new.
+    let rx = await Prescription.findOne({ appointment: appointment._id });
+    if (rx) {
+      rx.diagnosis = diagnosis || assessment || "";
+      rx.chiefComplaint = chiefComplaint || "";
+      rx.clinicalFindings = clinicalFindings || "";
+      rx.advice = advice || "";
+      rx.followUpDate = followUpDate ? new Date(followUpDate) : undefined;
+      rx.labTests = (Array.isArray(labTests) ? labTests : []).map((t) => String(t).trim()).filter(Boolean);
+      rx.doctorNotes = doctorNotes || "";
+      rx.doctorSignature = doctorSignature || doctor?.name || "";
+      rx.medicines = norm;
+      rx.totalMedicines = norm.length;
+      rx.status = sendToPharmacy ? "sent-to-pharmacy" : "new";
+      if (sendToPharmacy && !rx.submittedToPharmacyAt) rx.submittedToPharmacyAt = new Date();
+      await rx.save();
+    } else {
+      const prescriptionId = generatePrescriptionId();
+      rx = await Prescription.create({
+        hospitalId: targetHospitalId,
+        prescriptionId,
+        appointment: appointment._id,
+        patient: appointment.patient,
+        doctor: req.user._id,
+        diagnosis: diagnosis || assessment || "",
+        chiefComplaint: chiefComplaint || "",
+        clinicalFindings: clinicalFindings || "",
+        advice: advice || "",
+        followUpDate: followUpDate ? new Date(followUpDate) : undefined,
+        labTests: (Array.isArray(labTests) ? labTests : []).map((t) => String(t).trim()).filter(Boolean),
+        doctorNotes: doctorNotes || "",
+        doctorSignature: doctorSignature || doctor?.name || "",
+        medicines: norm,
+        totalMedicines: norm.length,
+        status: sendToPharmacy ? "sent-to-pharmacy" : "new",
+        submittedToPharmacyAt: sendToPharmacy ? new Date() : undefined,
+      });
+    }
 
-    // 3. Mark appointment completed — scoped to hospital.
-    await Appointment.updateOne({ ...scope, _id: appointment._id }, { $set: { status: "completed" } });
+    // 3. Mark appointment completed
+    await Appointment.updateOne({ _id: appointment._id }, { $set: { status: "completed" } });
 
-    // 4. Consultation invoice for the patient — scoped to hospital.
+    // 4. Auto-create & reserve Follow-up appointment if followUpDate is provided by doctor
+    let followUpAppt = null;
+    if (followUpDate) {
+      const followUpObj = new Date(followUpDate);
+      if (!isNaN(followUpObj.getTime())) {
+        followUpObj.setHours(10, 0, 0, 0); // default to 10:00 AM on followUpDate
+
+        // Check if an active appointment already exists for this patient & doctor on that date
+        const fStart = new Date(followUpObj); fStart.setHours(0, 0, 0, 0);
+        const fEnd = new Date(fStart); fEnd.setDate(fEnd.getDate() + 1);
+
+        const existingFollowUp = await Appointment.findOne({
+          hospitalId: targetHospitalId,
+          patient: appointment.patient,
+          doctor: req.user._id,
+          scheduledFor: { $gte: fStart, $lt: fEnd },
+          status: { $in: ["confirmed", "in-progress", "requested"] },
+        });
+
+        if (!existingFollowUp) {
+          followUpAppt = await Appointment.create({
+            hospitalId: targetHospitalId,
+            patient: appointment.patient,
+            doctor: req.user._id,
+            scheduledFor: followUpObj,
+            reason: "Follow-up Consultation (Post Visit)",
+            complaint: advice || assessment || "Follow-up Visit",
+            consultationFee: doctor?.profile?.consultationFee || 0,
+            status: "confirmed",
+            source: "doctor-followup",
+          });
+
+          // Run queue sanitizer to ensure clean slot and token (T01, T02...)
+          const { sanitizeDoctorDayQueue } = await import("../services/availabilityService.js");
+          await sanitizeDoctorDayQueue(req.user._id, fStart);
+        }
+      }
+    }
+
+    // 5. Consultation invoice for the patient — check for existing or create new.
     const fee = money(doctor?.profile?.consultationFee || appointment.consultationFee || 0);
     const opd = money(doctor?.profile?.opdCharges || 0);
     const total = money(fee + opd);
-    const invoice = await Invoice.create({
-      hospitalId: req.user.hospitalId,
-      invoiceNo: generateInvoiceNo(),
-      patient: appointment.patient,
-      doctor: req.user._id,
-      appointment: appointment._id,
-      prescription: rx._id,
-      type: "consultation",
-      consultationFee: fee,
-      opdCharges: opd,
-      subtotal: total,
-      discount: 0,
-      gstPercent: 0,
-      gstAmount: 0,
-      total,
-      status: "pending",
-    });
+    let invoice = await Invoice.findOne({ appointment: appointment._id, type: "consultation" });
+    if (invoice) {
+      invoice.consultationFee = fee;
+      invoice.opdCharges = opd;
+      invoice.subtotal = total;
+      invoice.total = total;
+      invoice.prescription = rx._id;
+      await invoice.save();
+    } else {
+      invoice = await Invoice.create({
+        hospitalId: targetHospitalId,
+        invoiceNo: generateInvoiceNo(),
+        patient: appointment.patient,
+        doctor: req.user._id,
+        appointment: appointment._id,
+        prescription: rx._id,
+        type: "consultation",
+        consultationFee: fee,
+        opdCharges: opd,
+        subtotal: total,
+        discount: 0,
+        gstPercent: 0,
+        gstAmount: 0,
+        total,
+        status: "pending",
+      });
+    }
 
-    // 5. Notifications — only to same-hospital pharmacy staff.
+    // 6. Notifications
     await notify(appointment.patient, {
       title: "Prescription ready",
       body: `Your prescription ${rx.prescriptionId} from Dr. ${doctor.name} has been issued.`,
@@ -152,6 +243,23 @@ router.put("/doctor/consultations/:appointmentId", allowRoles("doctor"), async (
       entity: "invoice",
       entityId: invoice._id,
     });
+
+    // Notify patient about follow-up appointment date
+    if (followUpDate) {
+      const followUpObj = new Date(followUpDate);
+      const formattedDate = !isNaN(followUpObj.getTime())
+        ? followUpObj.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })
+        : String(followUpDate);
+
+      await notify(appointment.patient, {
+        title: "Follow-up Appointment Scheduled",
+        body: `Dr. ${doctor.name} has scheduled your follow-up consultation for ${formattedDate}. Please check your appointments.`,
+        type: "appointment",
+        entity: "appointment",
+        entityId: followUpAppt ? followUpAppt._id : appointment._id,
+      });
+    }
+
     const pharmacies = await User.find({ ...scope, role: "pharmacy", active: true }).select("_id").lean();
     await Promise.all(pharmacies.map((p) => notify(p._id, {
       title: "New prescription",
@@ -161,8 +269,8 @@ router.put("/doctor/consultations/:appointmentId", allowRoles("doctor"), async (
       entityId: rx._id,
     })));
 
-    logAudit({ actor: req.user._id, actorRole: "doctor", action: "consultation.submit", entity: "appointment", entityId: appointment._id, meta: { prescription: rx.prescriptionId, invoice: invoice.invoiceNo, hospitalId: req.user.hospitalId } });
-    res.status(201).json({ note, prescription: rx, invoice });
+    logAudit({ actor: req.user._id, actorRole: "doctor", action: "consultation.submit", entity: "appointment", entityId: appointment._id, meta: { prescription: rx.prescriptionId, invoice: invoice.invoiceNo, hospitalId: targetHospitalId } });
+    res.status(201).json({ note, prescription: rx, invoice, followUpAppointment: followUpAppt });
   } catch (error) { next(error); }
 });
 

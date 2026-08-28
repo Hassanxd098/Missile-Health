@@ -48,6 +48,7 @@ const NAV = {
   ],
   hospital_admin: [
     { to: "/app/hospital/dashboard", label: "Dashboard", icon: IconDashboard },
+    { to: "/app/hospital/branch-requests", label: "Branch Requests", icon: IconHospital },
     { to: "/app/hospital/appointments", label: "Appointments", icon: IconCalendar },
     { to: "/app/hospital/patients", label: "Patients", icon: IconUsers },
     {
@@ -67,8 +68,12 @@ const NAV = {
     { to: "/app/hospital/reports", label: "Reports & Revenue", icon: IconChart },
   ],
   superadmin: [
+    { to: "/super-admin/dashboard", label: "Command Overview", icon: IconDashboard },
+    { to: "/super-admin/hospitals", label: "Hospitals & Branches", icon: IconHospital },
+    { to: "/super-admin/branch-requests", label: "Branch Requests", icon: IconHospital },
+    { to: "/super-admin/employees", label: "Branch Staff Directory", icon: IconUsers },
     { to: "/app/admin/admins", label: "Admins", icon: IconShield },
-    { to: "/app/admin/reports", label: "Revenue", icon: IconChart },
+    { to: "/app/admin/reports", label: "Revenue & Reports", icon: IconChart },
   ],
 };
 
@@ -199,6 +204,8 @@ export default function AppShell({ children }) {
     </>
   );
 
+  const hour = new Date().getHours();
+  const timeGreeting = hour < 12 ? "Good Morning" : hour < 17 ? "Good Afternoon" : "Good Evening";
   const greetingName = patient?.name ? (patient.role === "doctor" ? `Dr. ${patient.name}` : patient.name) : "User";
 
   return (
@@ -224,7 +231,7 @@ export default function AppShell({ children }) {
               <button onClick={() => setOpen(true)} className="lg:hidden p-2.5 rounded-full bg-[var(--color-surface)] shadow-sm text-[var(--color-ink-soft)] hover:bg-[var(--color-surface-2)]"><IconMenu /></button>
               <div>
                 <h1 className="text-xl md:text-2xl font-bold text-[var(--color-ink)] tracking-tight">
-                  Good Morning, {greetingName} <span className="inline-block animate-bounce">👋</span>
+                  {timeGreeting}, {greetingName} <span className="inline-block animate-bounce">👋</span>
                 </h1>
                 <p className="text-xs text-[var(--color-ink-soft)] mt-0.5">Your progress this week is Awesome.</p>
               </div>

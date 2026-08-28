@@ -216,6 +216,11 @@ import {
   allowRoles,
 } from "../middleware/authJwt.js";
 
+import User from "../models/User.js";
+import Hospital from "../models/Hospital.js";
+import Prescription from "../models/Prescription.js";
+import Invoice from "../models/Invoice.js";
+import ClinicalNote from "../models/ClinicalNote.js";
 import Appointment from "../models/Appointment.js";
 
 const router = Router();
@@ -388,22 +393,244 @@ Helpful platform areas (under /app/hospital):
   },
 };
 
-function buildAssistantSystemPrompt(role) {
+/* =========================================================
+   LIVE RAG CONTEXT RETRIEVAL (HOSPITAL & ROLE SCOPED)
+========================================================= */
+
+async function buildHospitalRAGContext(user) {
+  if (!user) return "";
+
+  const role = user.role;
+  const userId = user._id;
+  const hospitalId = user.hospitalId;
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayEnd = new Date(todayStart);
+  todayEnd.setDate(todayEnd.getDate() + 1);
+
+  let hospitalName = "Missile Health Platform";
+  let registeredHospitals = [];
+  try {
+    registeredHospitals = await Hospital.find({ status: { $ne: "inactive" } }).select("name code city state").lean();
+    if (hospitalId) {
+      const hosp = registeredHospitals.find((h) => String(h._id) === String(hospitalId));
+      if (hosp) hospitalName = `${hosp.name}${hosp.city ? ` (${hosp.city})` : ""}`;
+    }
+  } catch {
+    // Fallback
+  }
+
+  let ragContext = `\n=== LIVE REAL-TIME DATABASE CONTEXT (RAG) ===\nCurrent User Hospital: ${hospitalName}\nUser Name: ${user.name || "User"}\nUser Role: ${role ? role.toUpperCase() : "UNKNOWN"}\nToday's Date: ${todayStart.toISOString().slice(0, 10)}\n\n`;
+
+  if (registeredHospitals.length) {
+    ragContext += `REGISTERED HOSPITALS IN PLATFORM (${registeredHospitals.length}):\n`;
+    registeredHospitals.forEach((h, idx) => {
+      ragContext += `${idx + 1}. ${h.name}${h.city ? ` (${h.city})` : ""} | Code: ${h.code || "N/A"}\n`;
+    });
+    ragContext += `\n`;
+  }
+
+  try {
+    if (role === "doctor") {
+      const [doctorProfile, todayAppts] = await Promise.all([
+        User.findById(userId).select("name profile hospitalId").lean(),
+        Appointment.find({ doctor: userId, scheduledFor: { $gte: todayStart, $lt: todayEnd } })
+          .populate("patient", "name patientId mobile profile.age profile.gender")
+          .sort({ scheduledFor: 1 })
+          .lean(),
+      ]);
+
+      const confirmedWaiting = todayAppts.filter((a) => a.status === "confirmed");
+      const inProgress = todayAppts.filter((a) => a.status === "in-progress");
+      const completedToday = todayAppts.filter((a) => a.status === "completed");
+
+      ragContext += `DOCTOR PROFILE:\n- Name: Dr. ${doctorProfile?.name || user.name}\n- Specialty: ${doctorProfile?.profile?.specialty || "Specialist"}\n- Fee: ₹${doctorProfile?.profile?.consultationFee || 0}\n- Hours: ${doctorProfile?.profile?.visitingHours || "OPD Hours"}\n\n`;
+
+      ragContext += `DOCTOR'S TODAY APPOINTMENT SUMMARY:\n`;
+      ragContext += `- Total Appointments Scheduled Today: ${todayAppts.length}\n`;
+      ragContext += `- Patients Currently Waiting / Confirmed: ${confirmedWaiting.length}\n`;
+      ragContext += `- Consultations Currently In-Progress: ${inProgress.length}\n`;
+      ragContext += `- Consultations Completed Today: ${completedToday.length}\n\n`;
+
+      ragContext += `DETAILED PATIENT QUEUE FOR DR. ${doctorProfile?.name || user.name} TODAY:\n`;
+      if (todayAppts.length) {
+        todayAppts.forEach((a, idx) => {
+          const pt = a.patient || {};
+          const timeStr = new Date(a.scheduledFor).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          ragContext += `${idx + 1}. Token ${a.token || "T" + (idx + 1)}: ${pt.name || "Patient"} (ID: ${pt.patientId || "PAT-N/A"}) | Scheduled Time: ${timeStr} | Status: ${a.status.toUpperCase()} | Reason: ${a.reason || a.complaint || "Routine visit"}\n`;
+        });
+      } else {
+        ragContext += `No patients are scheduled for Dr. ${doctorProfile?.name || user.name} today.\n`;
+      }
+
+    } else if (role === "patient") {
+      const scope = (hospitalId && String(hospitalId).length > 5) ? { hospitalId } : {};
+
+      let [patientUser, upcomingAppts, availableDoctors, recentRx, pendingBills] = await Promise.all([
+        User.findById(userId).select("name patientId profile patient emergencyContact insurance").lean(),
+        Appointment.find({ patient: userId, scheduledFor: { $gte: todayStart } })
+          .populate("doctor", "name profile.specialty profile.location profile.consultationFee")
+          .sort({ scheduledFor: 1 })
+          .lean(),
+        User.find({ ...scope, role: "doctor", active: true })
+          .select("name profile.specialty profile.consultationFee profile.visitingHours profile.location profile.availableToday hospitalId")
+          .populate("hospitalId", "name code city state")
+          .sort({ name: 1 })
+          .lean(),
+        Prescription.find({ patient: userId }).populate("doctor", "name").sort({ createdAt: -1 }).limit(5).lean(),
+        Invoice.find({ patient: userId, status: "pending" }).lean(),
+      ]);
+
+      // Fallback: If no doctors found with hospitalId filter, fetch all active doctors
+      if (!availableDoctors || !availableDoctors.length) {
+        availableDoctors = await User.find({ role: "doctor", active: true })
+          .select("name profile.specialty profile.consultationFee profile.visitingHours profile.location profile.availableToday hospitalId")
+          .populate("hospitalId", "name code city state")
+          .sort({ name: 1 })
+          .lean();
+      }
+
+      ragContext += `PATIENT ACCOUNT:\n- Name: ${patientUser?.name || user.name}\n- Patient ID: ${patientUser?.patientId || "PAT-N/A"}\n\n`;
+
+      ragContext += `PATIENT'S UPCOMING APPOINTMENTS:\n`;
+      if (upcomingAppts.length) {
+        upcomingAppts.forEach((a, idx) => {
+          const doc = a.doctor || {};
+          const dateStr = new Date(a.scheduledFor).toLocaleString();
+          ragContext += `${idx + 1}. Dr. ${doc.name || "Doctor"} (${doc.profile?.specialty || "Specialist"}) | Date: ${dateStr} | Token: ${a.token || "N/A"} | Status: ${a.status.toUpperCase()} | Reason: ${a.reason || "Routine visit"}\n`;
+        });
+      } else {
+        ragContext += `You have no upcoming appointments scheduled.\n`;
+      }
+
+      ragContext += `\nAVAILABLE DOCTORS ACROSS HOSPITALS (${availableDoctors.length} active doctors registered):\n`;
+      if (availableDoctors && availableDoctors.length) {
+        availableDoctors.forEach((d, idx) => {
+          const spec = d.profile?.specialty || "General Physician";
+          const fee = d.profile?.consultationFee || 0;
+          const hours = d.profile?.visitingHours || "Available during OPD hours";
+          const hospName = d.hospitalId?.name || hospitalName;
+          const hospCity = d.hospitalId?.city ? ` (${d.hospitalId.city})` : "";
+          ragContext += `${idx + 1}. Dr. ${d.name} | Specialty: ${spec} | Hospital: ${hospName}${hospCity} | Consultation Fee: ₹${fee} | Visiting/Working Hours: ${hours} | Status: Available Today\n`;
+        });
+      } else {
+        ragContext += `No active doctors are listed in the database.\n`;
+      }
+
+      const totalPendingAmount = pendingBills.reduce((s, b) => s + (b.total || 0), 0);
+      ragContext += `\nBILLING & PRESCRIPTIONS SUMMARY:\n- Pending Unpaid Bills: ${pendingBills.length} bill(s) (Total Amount Due: ₹${totalPendingAmount})\n- Prescriptions on file: ${recentRx.length} recent prescription(s)\n`;
+
+    } else if (role === "admin" || role === "hospital_admin") {
+      const scope = hospitalId ? { hospitalId } : {};
+
+      const [doctorsList, patientsCount, todayAppts, pendingInvoices] = await Promise.all([
+        User.find({ ...scope, role: "doctor", active: true }).select("name profile.specialty profile.consultationFee profile.visitingHours").lean(),
+        User.countDocuments({ ...scope, role: "patient" }),
+        Appointment.find({ ...scope, scheduledFor: { $gte: todayStart, $lt: todayEnd } }).select("doctor status consultationFee").lean(),
+        Invoice.find({ ...scope, status: "pending" }).select("total").lean(),
+      ]);
+
+      const completedToday = todayAppts.filter((a) => a.status === "completed").length;
+      const cancelledToday = todayAppts.filter((a) => a.status === "cancelled").length;
+      const revenueToday = todayAppts.filter((a) => a.status === "completed").reduce((s, a) => s + (a.consultationFee || 0), 0);
+      const pendingRevenue = pendingInvoices.reduce((s, i) => s + (i.total || 0), 0);
+
+      ragContext += `HOSPITAL ADMINISTRATIVE OVERVIEW:\n`;
+      ragContext += `- Active Doctors: ${doctorsList.length}\n`;
+      ragContext += `- Registered Patients: ${patientsCount}\n`;
+      ragContext += `- Today's Total Appointments: ${todayAppts.length} (Completed: ${completedToday}, Cancelled: ${cancelledToday})\n`;
+      ragContext += `- Revenue Collected Today: ₹${revenueToday}\n`;
+      ragContext += `- Pending Invoice Collections: ${pendingInvoices.length} bill(s) (₹${pendingRevenue})\n\n`;
+
+      ragContext += `ACTIVE DOCTORS DIRECTORY:\n`;
+      doctorsList.forEach((d, idx) => {
+        const docTodayCount = todayAppts.filter((a) => String(a.doctor) === String(d._id)).length;
+        ragContext += `${idx + 1}. Dr. ${d.name} (${d.profile?.specialty || "Specialist"}) | Fee: ₹${d.profile?.consultationFee || 0} | Hours: ${d.profile?.visitingHours || "OPD"} | Today's Bookings: ${docTodayCount}\n`;
+      });
+
+    } else if (role === "reception") {
+      const scope = hospitalId ? { hospitalId } : {};
+
+      const [doctorsList, todayAppts] = await Promise.all([
+        User.find({ ...scope, role: "doctor", active: true }).select("name profile.specialty profile.consultationFee profile.visitingHours").lean(),
+        Appointment.find({ ...scope, scheduledFor: { $gte: todayStart, $lt: todayEnd } }).populate("patient", "name patientId").populate("doctor", "name").lean(),
+      ]);
+
+      ragContext += `RECEPTION DESK OVERVIEW:\n`;
+      ragContext += `- Total Appointments Scheduled Today: ${todayAppts.length}\n`;
+      ragContext += `- Available Doctors Today: ${doctorsList.length}\n\n`;
+      ragContext += `TODAY'S APPOINTMENT QUEUE:\n`;
+      todayAppts.forEach((a, idx) => {
+        ragContext += `${idx + 1}. Token ${a.token || "T" + (idx + 1)}: Patient ${a.patient?.name || "Patient"} (Dr. ${a.doctor?.name || "Doctor"}) | Status: ${a.status.toUpperCase()}\n`;
+      });
+
+    } else if (role === "pharmacy") {
+      const scope = hospitalId ? { hospitalId } : {};
+
+      const [pendingRx, pendingInv] = await Promise.all([
+        Prescription.find({ ...scope, status: { $in: ["sent-to-pharmacy", "preparing"] } }).populate("patient", "name patientId").populate("doctor", "name").lean(),
+        Invoice.find({ ...scope, status: "pending", type: "pharmacy" }).populate("patient", "name").lean(),
+      ]);
+
+      ragContext += `PHARMACY QUEUE OVERVIEW:\n`;
+      ragContext += `- Pending Prescriptions To Process: ${pendingRx.length}\n`;
+      ragContext += `- Pending Medicine Invoices: ${pendingInv.length}\n\n`;
+      if (pendingRx.length) {
+        ragContext += `PENDING PRESCRIPTIONS LIST:\n`;
+        pendingRx.forEach((rx, idx) => {
+          ragContext += `${idx + 1}. Rx ID ${rx.prescriptionId || rx._id} | Patient: ${rx.patient?.name || "Patient"} | Dr. ${rx.doctor?.name || "Doctor"} | Status: ${rx.status.toUpperCase()}\n`;
+        });
+      }
+    }
+
+    ragContext += `=================================================\n`;
+    return ragContext;
+  } catch (err) {
+    console.error("RAG context retrieval error:", err);
+    return `\n=== LIVE REAL-TIME DATABASE CONTEXT (RAG) ===\nHospital: ${hospitalName}\nUser Role: ${role}\nContext retrieval fallback.\n=================================================\n`;
+  }
+}
+
+function buildAssistantSystemPrompt(user, ragContext = "") {
+  const role = user?.role || "patient";
   const ctx = roleContext[role] || roleContext.patient;
 
-  return `You are Missile AI, the intelligent assistant for Missile Health.
+  return `You are Missile AI, the intelligent, hospital-grounded assistant for Missile Health.
 
-You are assisting an authenticated user inside the Missile Health healthcare platform.
+Assisting Authenticated User: ${user?.name || "User"}
+User's Role: ${ctx.label.toUpperCase()}
 
-The authenticated user's role is: ${ctx.label.toUpperCase()}.
+MULTI-HOSPITAL & DOCTOR SEARCH INSTRUCTIONS:
+- Missile Health is a multi-hospital healthcare platform managing multiple hospitals (including Shifa Clinic Hospital, Missile Health Hospital, and all hospitals listed in the RAG context).
+- ALL HOSPITALS AND DOCTORS LISTED IN THE LIVE DATABASE CONTEXT BELOW ARE PART OF THIS SYSTEM.
+- NEVER state "I do not have access to records for [Hospital Name]" or "I am integrated exclusively with [One Hospital]". You HAVE full access to all registered hospitals and doctors listed in the context below.
+- When a user asks about doctors at ANY hospital (e.g. "Shifa Clinic", "Shifa Clinic Hospital", "Missile Health Hospital", etc.):
+  1. Inspect the "AVAILABLE DOCTORS ACROSS HOSPITALS" and "REGISTERED HOSPITALS" in the context below.
+  2. Match the requested hospital name or specialty (e.g. "Shifa Clinic Hospital" matches doctors whose hospital is Shifa Clinic Hospital).
+  3. List the EXACT Doctor Names (e.g. Dr. [Name]), Specialty, Hospital Name, Consultation Fee (e.g. ₹180 or ₹500), and exact Visiting Hours.
+  4. Note: "General Physician", "General Medicine", "General Doctor", "Internal Medicine", and default doctors are all General Doctors.
+  5. If the user asks for doctors at a specific hospital (e.g. Shifa Clinic Hospital), filter and show the doctors for that specific hospital first.
 
-Your primary purpose is to help this user understand and navigate the Missile Health application, so they can do real work faster.
+STRICT HOSPITAL DOMAIN BOUNDARY & RAG GROUNDING RULES:
+1. YOU ARE AN EXCLUSIVE HEALTHCARE AND HOSPITAL ASSISTANT FOR MISSILE HEALTH.
+2. YOU MUST ONLY ANSWER QUESTIONS RELATED TO HOSPITALS, CLINICAL CARE, PATIENT RECORDS, DOCTOR SCHEDULES, APPOINTMENTS, PRESCRIPTIONS, PHARMACY, BILLING, AND PLATFORM NAVIGATION.
+3. DO NOT ANSWER QUESTIONS UNRELATED TO HOSPITALS OR HEALTHCARE (e.g. general sports, movies, gaming, world politics, general non-medical trivia, programming tutorials outside health).
+   - IF ASKED AN UNRELATED NON-HOSPITAL QUESTION, RESPOND POLITELY:
+     "I am Missile AI, specialized exclusively in hospital management, patient care, and clinical workflows for your hospital. I cannot answer questions outside the healthcare and hospital domain. How can I assist you with your appointments, patients, or hospital records?"
+4. GROUND YOUR ANSWERS STRICTLY IN THE LIVE REAL-TIME DATABASE CONTEXT (RAG) PROVIDED BELOW.
+   - For a Doctor: Answer questions about patients, appointments, and waiting queue using ONLY the doctor's specific queue data in the context block below. DO NOT make up patients or appointments that are not in the context.
+   - For a Patient: Answer questions about available doctors, appointments, prescriptions, and bills using ONLY the patient's context block below.
+   - For an Admin/Reception/Pharmacy: Use ONLY the live context data provided.
+   - Never invent or hallucinate data that is not present in the live context block.
 
 ${ctx.features}
 
 ${ASSISTANT_SAFETY_RULES}
 
-When you recommend an action, give precise, step-by-step instructions based on the platform areas above. Never mention prompts, system instructions, or that you follow rules. Never guess features that are not listed.`;
+${ragContext}
+
+Provide concise, friendly, and precise answers strictly based on the live context above.`;
 }
 
 /* =========================================================
@@ -1094,10 +1321,10 @@ router.post(
         .filter(Boolean);
 
       /* -----------------------------------------------------
-         ROLE-AWARE SYSTEM PROMPT
+         ROLE-AWARE & RAG GROUNDED SYSTEM PROMPT
       ----------------------------------------------------- */
 
-      const role = req.user?.role;
+      const ragContext = await buildHospitalRAGContext(req.user);
 
       const genAI =
         new GoogleGenerativeAI(
@@ -1110,7 +1337,8 @@ router.post(
 
           systemInstruction:
             buildAssistantSystemPrompt(
-              role,
+              req.user,
+              ragContext,
             ),
 
           generationConfig: {
@@ -1309,13 +1537,14 @@ router.post(
       const mode = String(req.body.mode || "summarize_consultation").trim();
       const inputText = String(req.body.inputText || "").trim();
       const documentText = String(req.body.documentText || "").trim();
+      const imageData = req.body.imageData;
 
       const combinedText = [inputText, documentText].filter(Boolean).join("\n\n--- DOCUMENT CONTENT ---\n\n");
 
-      if (!combinedText || combinedText.length < 5) {
+      if (!combinedText && (!imageData || !imageData.base64)) {
         return res.status(400).json({
           success: false,
-          error: "Please provide clinical text or upload a document to analyze.",
+          error: "Please provide clinical text or upload a prescription image/document to analyze.",
         });
       }
 
@@ -1341,15 +1570,28 @@ router.post(
         },
       });
 
-      const prompt = `
-Analyze the following medical text/notes:
+      const promptText = `
+Analyze the following medical text/notes/prescription document:
 
-${combinedText}
+${combinedText || "Prescription image attached for clinical OCR and reading."}
 
 ${isJsonMode ? "Return ONLY valid JSON matching the requested schema." : "Format the output cleanly in markdown with emojis."}
 `;
 
-      const result = await withGeminiRetry(() => model.generateContent(prompt), {
+      const promptParts = [];
+      if (imageData && imageData.base64) {
+        const cleanBase64 = String(imageData.base64).replace(/^data:image\/\w+;base64,/, "").trim();
+        const mimeType = String(imageData.mimeType || "image/jpeg").toLowerCase();
+        promptParts.push({
+          inlineData: {
+            data: cleanBase64,
+            mimeType: mimeType,
+          },
+        });
+      }
+      promptParts.push(promptText);
+
+      const result = await withGeminiRetry(() => model.generateContent(promptParts), {
         attempts: 3,
         delayMs: 1000,
         backoff: 1.8,
@@ -1379,6 +1621,139 @@ ${isJsonMode ? "Return ONLY valid JSON matching the requested schema." : "Format
         return res.status(503).json({
           success: false,
           error: "AI Assistant quota is temporarily exhausted. Please wait a moment and try again.",
+        });
+      }
+      next(error);
+    }
+  }
+);
+
+/* =========================================================
+   SPECIALIZED PRESCRIPTION OCR SCANNER ENDPOINT
+========================================================= */
+
+const PRESCRIPTION_OCR_PROMPT = `
+You are an advanced Medical OCR Engine specializing in reading handwritten and printed doctor prescriptions, clinic slips, and hospital discharge medications.
+
+Your task is to scan and extract all text from the attached prescription image with maximum precision into a clean, structured JSON format.
+
+STRICT OCR RULES:
+1. Extract ALL text present in the image (Doctor details, Patient details, Date, Diagnosis, Medicines, Advice, Lab Tests, Follow-up).
+2. Carefully decipher handwritten medical shorthand and abbreviations:
+   - "OD" -> Once Daily
+   - "BD" / "BID" -> Twice Daily (Morning & Night)
+   - "TDS" / "TID" -> Three Times Daily (Morning, Afternoon & Night)
+   - "QID" -> Four Times Daily
+   - "HS" -> Bedtime / Night
+   - "BBF" / "AC" -> Before Food
+   - "PC" / "AF" -> After Food
+   - "Tab" -> Tablet, "Cap" -> Capsule, "Syr" -> Syrup, "Inj" -> Injection, "Oint" -> Ointment
+3. Do NOT invent medicines or symptoms that are not in the image.
+4. If a field is not present in the image, return empty string or empty array.
+
+Return ONLY valid JSON matching this exact structure:
+{
+  "doctor": {
+    "name": "",
+    "specialty": "",
+    "hospital": ""
+  },
+  "patient": {
+    "name": "",
+    "age": "",
+    "gender": "",
+    "date": ""
+  },
+  "diagnosis": "",
+  "chiefComplaint": "",
+  "clinicalFindings": "",
+  "advice": "",
+  "followUpDate": "",
+  "labTests": [],
+  "medicines": [
+    {
+      "name": "",
+      "dosage": "",
+      "frequency": "",
+      "morning": false,
+      "afternoon": false,
+      "night": false,
+      "beforeFood": false,
+      "afterFood": false,
+      "durationDays": 0,
+      "quantity": 0,
+      "instructions": ""
+    }
+  ],
+  "rawOcrText": ""
+}
+`;
+
+router.post(
+  "/ocr-prescription",
+  requireAuth,
+  assistantRateLimit,
+  async (req, res, next) => {
+    try {
+      if (!config.geminiApiKey) {
+        return res.status(503).json({
+          success: false,
+          error: "Gemini AI OCR is not configured. Please add GEMINI_API_KEY to backend/.env",
+        });
+      }
+
+      const { imageData } = req.body;
+      if (!imageData || !imageData.base64) {
+        return res.status(400).json({
+          success: false,
+          error: "Please upload or capture a prescription image to scan.",
+        });
+      }
+
+      const cleanBase64 = String(imageData.base64).replace(/^data:image\/\w+;base64,/, "").trim();
+      const mimeType = String(imageData.mimeType || "image/jpeg").toLowerCase();
+
+      const genAI = new GoogleGenerativeAI(config.geminiApiKey);
+      const model = genAI.getGenerativeModel({
+        model: config.geminiModel,
+        systemInstruction: PRESCRIPTION_OCR_PROMPT,
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: "application/json",
+        },
+      });
+
+      const promptParts = [
+        {
+          inlineData: {
+            data: cleanBase64,
+            mimeType,
+          },
+        },
+        "Scan and extract all clinical details from this prescription image into structured JSON.",
+      ];
+
+      const result = await withGeminiRetry(() => model.generateContent(promptParts), {
+        attempts: 3,
+        delayMs: 1000,
+        backoff: 1.8,
+      });
+
+      const outputText = result.response.text().trim();
+      const parsedData = parseGeminiJson(outputText);
+
+      res.json({
+        success: true,
+        data: parsedData,
+        rawOutput: outputText,
+        disclaimer: PATIENT_AI_DISCLAIMER,
+      });
+    } catch (error) {
+      console.error("Prescription OCR Error:", error);
+      if (classifyGeminiError(error) === "quota") {
+        return res.status(503).json({
+          success: false,
+          error: "AI OCR quota is temporarily exhausted. Please wait a moment and try again.",
         });
       }
       next(error);

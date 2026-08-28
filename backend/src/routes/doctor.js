@@ -6,13 +6,13 @@ import Prescription from "../models/Prescription.js";
 import ClinicalNote from "../models/ClinicalNote.js";
 import Invoice from "../models/Invoice.js";
 import { logAudit } from "../services/auditService.js";
-import { slotStarts } from "../services/availabilityService.js";
+import { slotStarts, sanitizeDoctorDayQueue } from "../services/availabilityService.js";
 import { notify } from "../services/notificationService.js";
 
 const router = Router();
 router.use(requireAuth, allowRoles("doctor"));
 
-const patientFields = "name email mobile patientId profile.gender profile.age profile.bloodGroup profile.bloodPressure profile.sugarLevel profile.heightCm profile.weightKg profile.bmi patient.hospitalId patient.bloodGroup patient.heightCm patient.weightKg patient.bmi patient.bloodPressure patient.sugarLevel patient.allergies patient.existingDiseases patient.medicalHistory patient.currentMedicines active blocked";
+const patientFields = "name email mobile patientId profile patient emergencyContact insurance active blocked";
 const doctorFields = "name email profile.specialty profile.qualification profile.location profile.consultationFee profile.availableToday profile.opdCharges hospitalId";
 
 const dayRange = (offset = 0) => {
@@ -34,6 +34,9 @@ router.get("/home", async (req, res, next) => {
     const doctorId = req.user._id;
     const [start, end] = dayRange();
     const [weekStart, weekEnd] = lastNDays(7);
+
+    // Self-healing check: sanitize queue to resolve any double-booked times or duplicate tokens
+    await sanitizeDoctorDayQueue(doctorId, start);
 
     const [profile, today, upcoming, allAppointments, patientsSeen, weeklyAppointments, weeklyRevenue, recentNotes] = await Promise.all([
       User.findById(doctorId).select("name profile hospitalId").lean(),
@@ -140,58 +143,136 @@ router.patch("/appointments/:id", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-// Delay a patient in the queue.
+// Delay / Reschedule queue for a patient using time picker or minutes.
 router.post("/appointments/:id/delay", async (req, res, next) => {
   try {
     const scope = hospitalScope(req.user);
-    const minutes = Number(req.body.minutes);
-    if (!Number.isInteger(minutes) || minutes <= 0 || minutes > 240) {
-      return res.status(400).json({ error: "Provide a delay between 1 and 240 minutes" });
-    }
     const pivot = await Appointment.findOne({ ...scope, _id: req.params.id, doctor: req.user._id, status: { $in: ["confirmed", "in-progress"] } });
     if (!pivot) return res.status(404).json({ error: "Appointment not found or no longer actionable" });
 
-    const [start, end] = dayRangeFrom(pivot.scheduledFor);
+    const pivotTime = new Date(pivot.scheduledFor);
+    let diffMs = 0;
+
+    if (req.body.newTime) {
+      const timeStr = String(req.body.newTime).trim();
+      const targetDate = new Date(pivotTime);
+
+      if (/^\d{1,2}:\d{2}$/.test(timeStr)) {
+        const [h, m] = timeStr.split(":").map(Number);
+        targetDate.setHours(h, m, 0, 0);
+      } else {
+        const parsed = new Date(timeStr);
+        if (!isNaN(parsed.getTime())) {
+          targetDate.setTime(parsed.getTime());
+        }
+      }
+
+      diffMs = targetDate.getTime() - pivotTime.getTime();
+    } else {
+      const minutes = Number(req.body.minutes);
+      if (!Number.isInteger(minutes) || Math.abs(minutes) <= 0 || Math.abs(minutes) > 480) {
+        return res.status(400).json({ error: "Provide valid minutes or a new target time" });
+      }
+      diffMs = minutes * 60000;
+    }
+
+    if (diffMs === 0) {
+      return res.status(400).json({ error: "The new time is identical to the current scheduled time." });
+    }
+
+    const start = new Date(pivotTime); start.setHours(0, 0, 0, 0);
+    const end = new Date(start); end.setDate(end.getDate() + 1);
+
     const all = await Appointment.find({ ...scope, doctor: req.user._id, scheduledFor: { $gte: start, $lt: end }, status: { $nin: ["cancelled", "missed"] } })
       .select("scheduledFor patient status")
       .sort({ scheduledFor: 1 })
       .lean();
 
-    const moving = all.filter((a) => a.scheduledFor.getTime() >= pivot.scheduledFor.getTime());
-    if (!moving.length) return res.status(400).json({ error: "Nothing to delay for this appointment" });
+    const moving = all.filter((a) => new Date(a.scheduledFor).getTime() >= pivotTime.getTime());
+    if (!moving.length) return res.status(400).json({ error: "Nothing to adjust for this appointment" });
 
-    const movingIds = new Set(moving.map((a) => String(a._id)));
-    const fixed = new Set(all.filter((a) => !movingIds.has(String(a._id))).map((a) => a.scheduledFor.getTime()));
-
-    const { times } = slotStarts(req.user, start);
-    const baseTarget = pivot.scheduledFor.getTime() + minutes * 60000;
-    let idx = times.findIndex((t) => t.getTime() >= baseTarget);
-    while (idx < times.length && fixed.has(times[idx].getTime())) idx++;
-    if (idx < 0) idx = 0;
-    if (idx + moving.length > times.length) {
-      return res.status(400).json({ error: "No room left in this day's schedule for the delay — end the day or reduce the delay." });
-    }
-
+    const diffMinutes = Math.round(diffMs / 60000);
     const shifts = [];
+
     for (let i = 0; i < moving.length; i++) {
       const ap = moving[i];
-      let j = idx + i;
-      while (j < times.length && fixed.has(times[j].getTime())) j++;
-      const oldTime = ap.scheduledFor;
-      await Appointment.updateOne({ _id: ap._id }, { $set: { scheduledFor: times[j] } });
-      shifts.push({ appointmentId: ap._id, old: oldTime.toISOString(), to: times[j].toISOString() });
-      if (String(ap._id) !== String(pivot._id) && ap.patient) {
-        await notify(ap.patient, {
-          title: "Appointment time updated",
-          body: `Dr. ${req.user.name} is running behind — your visit is now scheduled for ${times[j].toLocaleString()}.`,
-          type: "appointment",
-          entity: "appointment",
-          entityId: ap._id,
-        });
+      const oldTime = new Date(ap.scheduledFor);
+      const newTime = new Date(oldTime.getTime() + diffMs);
+
+      await Appointment.updateOne({ _id: ap._id }, { $set: { scheduledFor: newTime } });
+      shifts.push({ appointmentId: ap._id, old: oldTime.toISOString(), to: newTime.toISOString() });
+
+      if (ap.patient) {
+        try {
+          await notify(ap.patient, {
+            title: "Appointment schedule updated",
+            body: `Dr. ${req.user.name} updated the schedule — your visit is now scheduled for ${newTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`,
+            type: "appointment",
+            entity: "appointment",
+            entityId: ap._id,
+          });
+        } catch {
+          // Notification fallback
+        }
       }
     }
-    logAudit({ actor: req.user._id, actorRole: "doctor", action: "doctor.delay", entity: "appointment", entityId: pivot._id, meta: { minutes, shifted: shifts.length, hospitalId: req.user.hospitalId } });
-    res.json({ shifted: shifts.length, pivot: pivot._id, shifts });
+
+    await sanitizeDoctorDayQueue(req.user._id, pivotTime);
+
+    logAudit({ actor: req.user._id, actorRole: "doctor", action: "doctor.delay", entity: "appointment", entityId: pivot._id, meta: { diffMinutes, shifted: shifts.length, hospitalId: req.user.hospitalId } });
+    res.json({ shifted: shifts.length, pivot: pivot._id, diffMinutes, shifts });
+  } catch (error) { next(error); }
+});
+
+// Reschedule an individual patient appointment to another date and time.
+router.post("/appointments/:id/reschedule", async (req, res, next) => {
+  try {
+    const scope = hospitalScope(req.user);
+    const pivot = await Appointment.findOne({ ...scope, _id: req.params.id, doctor: req.user._id, status: { $in: ["confirmed", "in-progress", "requested"] } });
+    if (!pivot) return res.status(404).json({ error: "Appointment not found or no longer actionable" });
+
+    const { date, time } = req.body;
+    if (!date || !time) return res.status(400).json({ error: "Both Date and Time are required for rescheduling" });
+
+    const [year, month, day] = String(date).split("-").map(Number);
+    const [hours, minutes] = String(time).split(":").map(Number);
+
+    if (!year || !month || !day || Number.isNaN(hours) || Number.isNaN(minutes)) {
+      return res.status(400).json({ error: "Invalid date or time format" });
+    }
+
+    const newScheduledFor = new Date(year, month - 1, day, hours, minutes, 0, 0);
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - 5);
+
+    if (newScheduledFor < now) {
+      return res.status(400).json({ error: "Rescheduled date and time cannot be in the past" });
+    }
+
+    const oldScheduledFor = pivot.scheduledFor;
+    pivot.scheduledFor = newScheduledFor;
+    if (pivot.status === "requested") pivot.status = "confirmed";
+    await pivot.save();
+
+    if (pivot.patient) {
+      try {
+        await notify(pivot.patient, {
+          title: "Appointment Rescheduled",
+          body: `Dr. ${req.user.name} has rescheduled your appointment to ${newScheduledFor.toLocaleDateString()} at ${newScheduledFor.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`,
+          type: "appointment",
+          entity: "appointment",
+          entityId: pivot._id,
+        });
+      } catch {
+        // Notification fallback
+      }
+    }
+
+    await sanitizeDoctorDayQueue(req.user._id, oldScheduledFor);
+    await sanitizeDoctorDayQueue(req.user._id, newScheduledFor);
+
+    logAudit({ actor: req.user._id, actorRole: "doctor", action: "doctor.reschedule_date", entity: "appointment", entityId: pivot._id, meta: { old: oldScheduledFor, to: newScheduledFor, hospitalId: req.user.hospitalId } });
+    res.json({ success: true, message: "Appointment rescheduled successfully", scheduledFor: newScheduledFor });
   } catch (error) { next(error); }
 });
 
@@ -247,17 +328,7 @@ router.get("/consult/:appointmentId", async (req, res, next) => {
   try {
     const appointment = await Appointment.findOne({ _id: req.params.appointmentId, doctor: req.user._id }).lean();
     if (!appointment) return res.status(404).json({ error: "Appointment not found" });
-
-    // Enforce 1-hour start rule: Doctor can only enter consultation room if appointment is within 1 hour or past scheduled time
-    const now = Date.now();
-    const apptTime = new Date(appointment.scheduledFor).getTime();
-    const oneHourMs = 60 * 60 * 1000;
-    if (appointment.status === "confirmed" && (apptTime - now) > oneHourMs) {
-      const timeStr = new Date(appointment.scheduledFor).toLocaleString();
-      return res.status(400).json({
-        error: `Consultation room is locked. This appointment is scheduled for ${timeStr}. You can only start consultations within 1 hour of the scheduled time.`
-      });
-    }
+    const scope = hospitalScope(req.user);
     const patientFields = "name email mobile patientId profile patient emergencyContact insurance active";
     // Prefer the hospital-scoped lookup, but fall back to a global lookup so a
     // legacy/migrated patient (missing or mismatched hospitalId) still shows

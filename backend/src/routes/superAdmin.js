@@ -402,4 +402,139 @@ router.delete("/hospitals/:id", async (req, res, next) => {
   }
 });
 
+/* =========================================================
+   SUPERADMIN BRANCH REQUESTS & EMPLOYEE PROFILES
+========================================================= */
+
+// List all branch requests (pending, approved, rejected)
+router.get("/branch-requests", async (req, res, next) => {
+  try {
+    const { status = "all" } = req.query;
+    const query = { isBranch: true };
+    if (status !== "all") query.approvalStatus = status;
+
+    const branchRequests = await Hospital.find(query)
+      .populate("parentHospital", "name code city")
+      .populate("admin", "name email mobile")
+      .populate("requestedBy", "name email mobile")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json({ branchRequests });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Approve a hospital branch request
+router.post("/branch-requests/:id/approve", async (req, res, next) => {
+  try {
+    const branch = await Hospital.findById(req.params.id);
+    if (!branch || !branch.isBranch) {
+      return res.status(404).json({ success: false, message: "Branch request not found" });
+    }
+
+    branch.approvalStatus = "approved";
+    branch.status = "active";
+    branch.rejectionReason = "";
+
+    if (!branch.admin && branch.requestedBy) {
+      branch.admin = branch.requestedBy;
+    }
+    await branch.save();
+
+    if (branch.requestedBy) {
+      await notify(branch.requestedBy, {
+        title: "Branch Request Approved 🎉",
+        body: `Your request for new branch '${branch.name}' (${branch.code}) has been approved by Superadmin and is now active!`,
+        type: "system",
+      });
+    }
+
+    logAudit({
+      actor: req.user._id,
+      actorRole: "superadmin",
+      action: "hospital_branch.approve",
+      entity: "hospital",
+      entityId: branch._id,
+      meta: { name: branch.name, code: branch.code },
+    });
+
+    res.json({ success: true, branch });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Reject a hospital branch request
+router.post("/branch-requests/:id/reject", async (req, res, next) => {
+  try {
+    const { rejectionReason = "Does not meet branch setup criteria" } = req.body;
+    const branch = await Hospital.findById(req.params.id);
+    if (!branch || !branch.isBranch) {
+      return res.status(404).json({ success: false, message: "Branch request not found" });
+    }
+
+    branch.approvalStatus = "rejected";
+    branch.status = "inactive";
+    branch.rejectionReason = rejectionReason;
+    await branch.save();
+
+    if (branch.requestedBy) {
+      await notify(branch.requestedBy, {
+        title: "Branch Request Declined",
+        body: `Your request for branch '${branch.name}' was declined by Superadmin. Reason: ${rejectionReason}`,
+        type: "system",
+      });
+    }
+
+    logAudit({
+      actor: req.user._id,
+      actorRole: "superadmin",
+      action: "hospital_branch.reject",
+      entity: "hospital",
+      entityId: branch._id,
+      meta: { name: branch.name, rejectionReason },
+    });
+
+    res.json({ success: true, branch });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Superadmin: View all branch employees & their profiles
+router.get("/all-employees", async (req, res, next) => {
+  try {
+    const { hospitalId, role, search = "", page = 1, limit = 30 } = req.query;
+    const query = { role: { $in: ["doctor", "pharmacy", "reception", "cleaner", "nurse", "management", "security", "other"] } };
+
+    if (hospitalId && hospitalId !== "all") query.hospitalId = hospitalId;
+    if (role && role !== "all") query.role = role;
+
+    if (search) {
+      query.$or = [
+        { name: new RegExp(search, "i") },
+        { email: new RegExp(search, "i") },
+        { employeeNumber: new RegExp(search, "i") },
+        { mobile: new RegExp(search, "i") },
+        { "profile.specialty": new RegExp(search, "i") },
+      ];
+    }
+
+    const total = await User.countDocuments(query);
+    const employees = await User.find(query)
+      .populate("hospitalId", "name code city isBranch parentHospital")
+      .select("name email mobile role active hospitalId employeeNumber profile createdAt lastLoginAt")
+      .sort({ createdAt: -1 })
+      .skip((Math.max(Number(page), 1) - 1) * Number(limit))
+      .limit(Number(limit))
+      .lean();
+
+    res.json({ employees, total, page: Number(page) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

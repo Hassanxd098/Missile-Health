@@ -9,7 +9,7 @@ import Invoice from "../models/Invoice.js";
 import { notify } from "../services/notificationService.js";
 import { logAudit } from "../services/auditService.js";
 import { generatePatientId, isValidMobile, generateToken } from "../services/idService.js";
-import { slotStarts, doctorWindows } from "../services/availabilityService.js";
+import { slotStarts, doctorWindows, sanitizeDoctorDayQueue } from "../services/availabilityService.js";
 
 const router = Router();
 router.use(requireAuth, allowRoles("reception", "admin", "hospital_admin"));
@@ -205,10 +205,10 @@ router.post("/appointments", async (req, res, next) => {
       paymentCollectedBy: req.user._id,
     });
     const [start] = dayWindow(slot);
-    const end = new Date(start); end.setDate(end.getDate() + 1);
-    const seq = await Appointment.countDocuments({ ...scope, doctor: doctor._id, scheduledFor: { $gte: start, $lt: end }, status: { $ne: "cancelled" } });
-    appointment.token = `T${generateToken(seq)}`;
-    await appointment.save();
+    await sanitizeDoctorDayQueue(doctor._id, start);
+    const freshAppt = await Appointment.findById(appointment._id).lean();
+    if (freshAppt?.token) appointment.token = freshAppt.token;
+    if (freshAppt?.scheduledFor) appointment.scheduledFor = freshAppt.scheduledFor;
 
     await notify(patient._id, {
       title: "Appointment booked at reception",
