@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import connectDB from "../utils/db.js";
 import Hospital from "../models/Hospital.js";
 import User from "../models/User.js";
 import dotenv from "dotenv";
@@ -6,7 +7,7 @@ import dotenv from "dotenv";
 dotenv.config({ path: "./.env" });
 
 (async () => {
-  await mongoose.connect(process.env.MONGODB_URI);
+  await connectDB();
 
   const hospitals = await Hospital.find({}).lean();
   console.log("=== All Hospitals in DB ===");

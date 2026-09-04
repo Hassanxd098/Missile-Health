@@ -19,6 +19,7 @@ import receptionRoutes from "./routes/reception.js";
 import superAdminRoutes from "./routes/superAdmin.js";
 import publicRoutes from "./routes/public.js";
 import { generateHospitalId } from "./services/idService.js";
+import connectDB from "./utils/db.js";
 
 requireConfig("mongoUri", "jwtSecret");
 const app = express();
@@ -26,38 +27,17 @@ app.use(cors({ origin: true, credentials: true, methods: ["GET", "POST", "PUT", 
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan("dev"));
 
-let connectPromise = null;
-async function ensureDBConnected() {
-  if (mongoose.connection.readyState === 1) return;
-  if (!connectPromise) {
-    connectPromise = mongoose.connect(config.mongoUri, { serverSelectionTimeoutMS: 8000 })
-      .then(async (m) => {
-        await seedSuperAdmin().catch((e) => console.warn("Seed superadmin:", e.message));
-        const hospital = await seedDefaultHospital().catch((e) => console.warn("Seed hospital:", e.message));
-        if (hospital) {
-          await migrateExistingData(hospital._id).catch(() => { });
-          await backfillDoctorAvailability().catch(() => { });
-        }
-        return m;
-      })
-      .catch((err) => {
-        connectPromise = null;
-        throw err;
-      });
-  }
-  await connectPromise;
-}
-
 app.use(async (req, res, next) => {
   if (req.path === "/api/health") return next();
   try {
-    await ensureDBConnected();
+    await connectDB();
     next();
   } catch (err) {
     console.error("Database connection failure:", err);
     res.status(500).json({ error: "Database connection failed. Please check MONGODB_URI." });
   }
 });
+
 app.get("/api", (req, res) => {
   res.status(200).json({
     success: true,
@@ -74,42 +54,6 @@ app.get("/api/health", (req, res) =>
         : "disconnected",
   }),
 );
-// API root
-// app.get("/api", (req, res) => {
-//   res.status(200).json({
-//     success: true,
-//     message: "Missile Health Backend API is running",
-//   });
-// });
-
-// // Health check - no database connection required
-// app.get("/api/health", (req, res) => {
-//   res.status(200).json({
-//     status: "ok",
-//     database:
-//       mongoose.connection.readyState === 1
-//         ? "connected"
-//         : "disconnected",
-//   });
-// });
-
-// // Connect to MongoDB for all other API requests
-// app.use(async (req, res, next) => {
-//   try {
-//     await ensureDBConnected();
-//     next();
-//   } catch (err) {
-//     console.error("Database connection failure:", err);
-
-//     res.status(500).json({
-//       error: "Database connection failed. Please check MONGODB_URI.",
-//     });
-//   }
-// });
-
-// app.get("/api/health", (req, res) =>
-//   res.json({ status: "ok", database: mongoose.connection.readyState === 1 ? "connected" : "disconnected" }),
-// );
 
 app.use("/api/auth", authRoutes);
 app.use("/api/dashboard", dashboardRoutes);
@@ -288,10 +232,8 @@ if (!process.env.VERCEL) {
   app.listen(config.port, () => console.log(`Missile Health API listening on port ${config.port}`));
 }
 
-mongoose
-  .connect(config.mongoUri)
+connectDB()
   .then(async () => {
-    console.log("Connected to MongoDB Atlas successfully.");
     await seedSuperAdmin().catch((e) => console.warn("Seed superadmin:", e.message));
     const hospital = await seedDefaultHospital().catch((e) => console.warn("Seed hospital:", e.message));
     if (hospital) {
@@ -300,7 +242,7 @@ mongoose
     }
   })
   .catch((error) => {
-    console.error("MongoDB connection failed:", error.message);
+    console.error("Initial DB connection failed:", error.message);
   });
 
 export default app;

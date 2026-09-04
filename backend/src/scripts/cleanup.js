@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import connectDB from "../utils/db.js";
 import User from "../models/User.js";
 import Hospital from "../models/Hospital.js";
 import dotenv from "dotenv";
@@ -6,7 +7,7 @@ import dotenv from "dotenv";
 dotenv.config({ path: "./.env" });
 
 const run = async () => {
-  await mongoose.connect(process.env.MONGODB_URI);
+  await connectDB();
   await User.deleteMany({ role: "superadmin" });
   await Hospital.deleteMany({});
   await User.deleteMany({ role: "hospital_admin" });
